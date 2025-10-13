@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  aggregator-db:
+    image: postgres:16-alpine
+    container_name: aggregator-db
+    environment:
+      POSTGRES_DB: aggregator
+      POSTGRES_USER: aggregator
+      POSTGRES_PASSWORD: aggregator
+    volumes:
+      - aggregator-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aggregator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  aggregator-db-data:
