@@ -404,6 +404,7 @@ secrets/
 # Exclude ALL documentation files - this is private development
 *.md
 !LICENSE
+!README.md
 *.html
 *.txt
 
@@ -416,6 +417,7 @@ PROXMOX_*
 HOW_TO_*
 NEXT_*
 Starting*
+README_D*
 
 # Setup and documentation files
 SETUP_*
