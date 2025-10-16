@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"time"
 
@@ -88,6 +89,7 @@ func (h *AgentHandler) GetCommands(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update last seen"})
 		return
 	}
+	log.Printf("Updated last_seen for agent %s", agentID)
 
 	// Get pending commands
 	commands, err := h.commandQueries.GetPendingCommands(agentID)
@@ -116,15 +118,20 @@ func (h *AgentHandler) GetCommands(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// ListAgents returns all agents
+// ListAgents returns all agents with last scan information
 func (h *AgentHandler) ListAgents(c *gin.Context) {
 	status := c.Query("status")
 	osType := c.Query("os_type")
 
-	agents, err := h.agentQueries.ListAgents(status, osType)
+	agents, err := h.agentQueries.ListAgentsWithLastScan(status, osType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list agents"})
 		return
+	}
+
+	// Debug: Log what we're returning
+	for _, agent := range agents {
+		log.Printf("DEBUG: Returning agent %s: last_seen=%s, last_scan=%s", agent.Hostname, agent.LastSeen, agent.LastScan)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -133,7 +140,7 @@ func (h *AgentHandler) ListAgents(c *gin.Context) {
 	})
 }
 
-// GetAgent returns a single agent by ID
+// GetAgent returns a single agent by ID with last scan information
 func (h *AgentHandler) GetAgent(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
@@ -142,7 +149,7 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 		return
 	}
 
-	agent, err := h.agentQueries.GetAgentByID(id)
+	agent, err := h.agentQueries.GetAgentWithLastScan(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
 		return
@@ -175,4 +182,95 @@ func (h *AgentHandler) TriggerScan(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "scan triggered", "command_id": cmd.ID})
+}
+
+// TriggerUpdate creates an update command for an agent
+func (h *AgentHandler) TriggerUpdate(c *gin.Context) {
+	idStr := c.Param("id")
+	agentID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	var req struct {
+		PackageType string `json:"package_type"` // "system", "docker", or specific type
+		PackageName string `json:"package_name"` // optional specific package
+		Action      string `json:"action"`       // "update_all", "update_approved", or "update_package"
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request format"})
+		return
+	}
+
+	// Validate action
+	validActions := map[string]bool{
+		"update_all":        true,
+		"update_approved":   true,
+		"update_package":    true,
+	}
+	if !validActions[req.Action] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid action. Use: update_all, update_approved, or update_package"})
+		return
+	}
+
+	// Create parameters for the command
+	params := models.JSONB{
+		"action":       req.Action,
+		"package_type": req.PackageType,
+	}
+	if req.PackageName != "" {
+		params["package_name"] = req.PackageName
+	}
+
+	// Create update command
+	cmd := &models.AgentCommand{
+		ID:          uuid.New(),
+		AgentID:     agentID,
+		CommandType: models.CommandTypeInstallUpdate,
+		Params:      params,
+		Status:      models.CommandStatusPending,
+	}
+
+	if err := h.commandQueries.CreateCommand(cmd); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create update command"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "update command sent to agent",
+		"command_id": cmd.ID,
+		"action":     req.Action,
+		"package":    req.PackageName,
+	})
+}
+
+// UnregisterAgent removes an agent from the system
+func (h *AgentHandler) UnregisterAgent(c *gin.Context) {
+	idStr := c.Param("id")
+	agentID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	// Check if agent exists
+	agent, err := h.agentQueries.GetAgentByID(agentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Delete the agent and all associated data
+	if err := h.agentQueries.DeleteAgent(agentID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete agent"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "agent unregistered successfully",
+		"agent_id": agentID,
+		"hostname": agent.Hostname,
+	})
 }

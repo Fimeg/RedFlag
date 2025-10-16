@@ -14,7 +14,7 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
+# Output of go coverage tool, specifically when used with LiteIDE
 *.out
 
 # Go workspace file
@@ -125,12 +125,6 @@ out
 .nuxt
 dist
 
-# Gatsby files
-.cache/
-# Comment in the public line in if your project uses Gatsby and not Next.js
-# https://nextjs.org/blog/next-9-1#public-directory-support
-# public
-
 # vuepress build output
 .vuepress/dist
 
@@ -145,7 +139,7 @@ dist
 .serverless/
 
 # FuseBox cache
-.fusebox/
+.fusebox
 
 # DynamoDB Local files
 .dynamodb/
@@ -155,28 +149,6 @@ dist
 
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
-
-# yarn v2
-.yarn/cache
-.yarn/unplugged
-.yarn/build-state.yml
-.yarn/install-state.gz
-.pnp.*
-
-# =============================================================================
-# React / Vite / Frontend Build
-# =============================================================================
-# Vite build output
-dist/
-dist-ssr/
-build/
-
-# Storybook build outputs
-storybook-static
-
-# Temporary folders
-tmp/
-temp/
 
 # =============================================================================
 # IDE / Editor Files
@@ -386,25 +358,40 @@ secrets/
 *claude*
 
 # =============================================================================
-# Include ONLY essential project files
+# Essential files to INCLUDE for GitHub alpha release
 # =============================================================================
+# Include essential documentation files
 !README.md
 !LICENSE
-!.gitignore
 !.env.example
 !docker-compose.yml
-!Dockerfile*
 !Makefile
+
+# Screenshots (needed for README)
+!Screenshots/
+*.png
+*.jpg
+*.jpeg
+
+# Core functionality (needed for working system)
+!aggregator-agent/internal/installer/
+!aggregator-agent/internal/scanner/dnf.go
+!aggregator-server/internal/api/handlers/
+!aggregator-server/internal/services/
+!aggregator-server/internal/database/migrations/
 
 # Only minimal README, no other documentation
 
 # =============================================================================
-# ALL DOCUMENTATION (private development - version retention only)
+# Exclude detailed documentation and session files (keep private development)
 # =============================================================================
 # Exclude ALL documentation files - this is private development
 *.md
-!LICENSE
 !README.md
+!LICENSE
+!.env.example
+!docker-compose.yml
+!Makefile
 *.html
 *.txt
 
@@ -418,6 +405,7 @@ HOW_TO_*
 NEXT_*
 Starting*
 README_D*
+README_backup*
 
 # Setup and documentation files
 SETUP_*
@@ -425,4 +413,6 @@ CONTRIBUTING*
 .github/
 docs/
 
-# Only keep actual project code, no documentation
+# AI / LLM Development Files
+.claude/
+*claude*
