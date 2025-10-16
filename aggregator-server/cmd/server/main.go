@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"time"
 
 	"github.com/aggregator-project/aggregator-server/internal/api/handlers"
 	"github.com/aggregator-project/aggregator-server/internal/api/middleware"
 	"github.com/aggregator-project/aggregator-server/internal/config"
 	"github.com/aggregator-project/aggregator-server/internal/database"
 	"github.com/aggregator-project/aggregator-server/internal/database/queries"
+	"github.com/aggregator-project/aggregator-server/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,7 +35,9 @@ func main() {
 	// Run migrations
 	migrationsPath := filepath.Join("internal", "database", "migrations")
 	if err := db.Migrate(migrationsPath); err != nil {
-		log.Fatal("Failed to run migrations:", err)
+		// For development, continue even if migrations fail
+		// In production, you might want to handle this more gracefully
+		fmt.Printf("Warning: Migration failed (tables may already exist): %v\n", err)
 	}
 
 	// Initialize queries
@@ -41,12 +45,22 @@ func main() {
 	updateQueries := queries.NewUpdateQueries(db.DB)
 	commandQueries := queries.NewCommandQueries(db.DB)
 
+	// Initialize services
+	timezoneService := services.NewTimezoneService(cfg)
+
 	// Initialize handlers
 	agentHandler := handlers.NewAgentHandler(agentQueries, commandQueries, cfg.CheckInInterval)
-	updateHandler := handlers.NewUpdateHandler(updateQueries)
+	updateHandler := handlers.NewUpdateHandler(updateQueries, agentQueries)
+	authHandler := handlers.NewAuthHandler(cfg.JWTSecret)
+	statsHandler := handlers.NewStatsHandler(agentQueries, updateQueries)
+	settingsHandler := handlers.NewSettingsHandler(timezoneService)
+	dockerHandler := handlers.NewDockerHandler(updateQueries, agentQueries, commandQueries)
 
 	// Setup router
 	router := gin.Default()
+
+	// Add CORS middleware
+	router.Use(middleware.CORSMiddleware())
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
@@ -56,6 +70,11 @@ func main() {
 	// API routes
 	api := router.Group("/api/v1")
 	{
+		// Authentication routes
+		api.POST("/auth/login", authHandler.Login)
+		api.POST("/auth/logout", authHandler.Logout)
+		api.GET("/auth/verify", authHandler.VerifyToken)
+
 		// Public routes
 		api.POST("/agents/register", agentHandler.RegisterAgent)
 
@@ -68,14 +87,56 @@ func main() {
 			agents.POST("/:id/logs", updateHandler.ReportLog)
 		}
 
-		// Dashboard/Web routes (will add proper auth later)
-		api.GET("/agents", agentHandler.ListAgents)
-		api.GET("/agents/:id", agentHandler.GetAgent)
-		api.POST("/agents/:id/scan", agentHandler.TriggerScan)
-		api.GET("/updates", updateHandler.ListUpdates)
-		api.GET("/updates/:id", updateHandler.GetUpdate)
-		api.POST("/updates/:id/approve", updateHandler.ApproveUpdate)
+		// Dashboard/Web routes (protected by web auth)
+		dashboard := api.Group("/")
+		dashboard.Use(authHandler.WebAuthMiddleware())
+		{
+			dashboard.GET("/stats/summary", statsHandler.GetDashboardStats)
+			dashboard.GET("/agents", agentHandler.ListAgents)
+			dashboard.GET("/agents/:id", agentHandler.GetAgent)
+			dashboard.POST("/agents/:id/scan", agentHandler.TriggerScan)
+			dashboard.POST("/agents/:id/update", agentHandler.TriggerUpdate)
+			dashboard.DELETE("/agents/:id", agentHandler.UnregisterAgent)
+			dashboard.GET("/updates", updateHandler.ListUpdates)
+			dashboard.GET("/updates/:id", updateHandler.GetUpdate)
+			dashboard.POST("/updates/:id/approve", updateHandler.ApproveUpdate)
+			dashboard.POST("/updates/approve", updateHandler.ApproveUpdates)
+			dashboard.POST("/updates/:id/reject", updateHandler.RejectUpdate)
+			dashboard.POST("/updates/:id/install", updateHandler.InstallUpdate)
+
+			// Settings routes
+			dashboard.GET("/settings/timezone", settingsHandler.GetTimezone)
+			dashboard.GET("/settings/timezones", settingsHandler.GetTimezones)
+			dashboard.PUT("/settings/timezone", settingsHandler.UpdateTimezone)
+
+			// Docker routes
+			dashboard.GET("/docker/containers", dockerHandler.GetContainers)
+			dashboard.GET("/docker/stats", dockerHandler.GetStats)
+			dashboard.POST("/docker/containers/:container_id/images/:image_id/approve", dockerHandler.ApproveUpdate)
+			dashboard.POST("/docker/containers/:container_id/images/:image_id/reject", dockerHandler.RejectUpdate)
+			dashboard.POST("/docker/containers/:container_id/images/:image_id/install", dockerHandler.InstallUpdate)
+		}
 	}
+
+	// Start background goroutine to mark offline agents
+	// TODO: Make these values configurable via settings:
+	// - Check interval (currently 2 minutes, should match agent heartbeat setting)
+	// - Offline threshold (currently 10 minutes, should be based on agent check-in interval + missed checks)
+	// - Missed checks before offline (default 2, so 300s agent interval * 2 = 10 minutes)
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute) // Check every 2 minutes
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Mark agents as offline if they haven't checked in within 10 minutes
+				if err := agentQueries.MarkOfflineAgents(10 * time.Minute); err != nil {
+					log.Printf("Failed to mark offline agents: %v", err)
+				}
+			}
+		}
+	}()
 
 	// Start server
 	addr := ":" + cfg.ServerPort

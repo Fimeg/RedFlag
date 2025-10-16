@@ -7,17 +7,14 @@ import {
   AlertTriangle,
   XCircle,
   RefreshCw,
-  Activity,
-  TrendingUp,
   Clock,
 } from 'lucide-react';
 import { useDashboardStats } from '@/hooks/useStats';
-import { formatRelativeTime } from '@/lib/utils';
 
 const Dashboard: React.FC = () => {
-  const { data: stats, isLoading, error } = useDashboardStats();
+  const { data: stats, isPending, error } = useDashboardStats();
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="px-4 sm:px-6 lg:px-8">
         <div className="animate-pulse">

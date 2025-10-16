@@ -1,16 +1,15 @@
 import React, { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { useAuthStore } from '@/lib/store';
-import { useSettingsStore } from '@/lib/store';
+import { useAuthStore, useUIStore } from '@/lib/store';
 import Layout from '@/components/Layout';
 import Dashboard from '@/pages/Dashboard';
 import Agents from '@/pages/Agents';
 import Updates from '@/pages/Updates';
+import Docker from '@/pages/Docker';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Login from '@/pages/Login';
-import NotificationCenter from '@/components/NotificationCenter';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -25,7 +24,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
 const App: React.FC = () => {
   const { isAuthenticated, token } = useAuthStore();
-  const { theme } = useSettingsStore();
+  const { theme } = useUIStore();
 
   // Apply theme to document
   useEffect(() => {
@@ -72,9 +71,7 @@ const App: React.FC = () => {
         }}
       />
 
-      {/* Notification center */}
-      {isAuthenticated && <NotificationCenter />}
-
+  
       {/* App routes */}
       <Routes>
         {/* Login route */}
@@ -96,6 +93,7 @@ const App: React.FC = () => {
                   <Route path="/agents/:id" element={<Agents />} />
                   <Route path="/updates" element={<Updates />} />
                   <Route path="/updates/:id" element={<Updates />} />
+                  <Route path="/docker" element={<Docker />} />
                   <Route path="/logs" element={<Logs />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<Navigate to="/" replace />} />

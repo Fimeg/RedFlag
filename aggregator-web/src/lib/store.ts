@@ -173,7 +173,7 @@ interface RealtimeState {
   }>;
   setConnected: (connected: boolean) => void;
   setLastUpdate: (timestamp: string) => void;
-  addNotification: (notification: Omit<typeof RealtimeState.prototype.notifications[0], 'id' | 'timestamp' | 'read'>) => void;
+  addNotification: (notification: Omit<RealtimeState['notifications'][0], 'id' | 'timestamp' | 'read'>) => void;
   markNotificationRead: (id: string) => void;
   clearNotifications: () => void;
 }

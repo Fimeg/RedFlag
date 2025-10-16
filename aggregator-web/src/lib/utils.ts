@@ -19,7 +19,32 @@ export const formatDate = (dateString: string): string => {
 };
 
 export const formatRelativeTime = (dateString: string): string => {
-  const date = new Date(dateString);
+  if (!dateString) return 'Never';
+
+  let date: Date;
+  try {
+    // Handle various timestamp formats
+    if (dateString.includes('T') && dateString.includes('Z')) {
+      // ISO 8601 format
+      date = new Date(dateString);
+    } else if (dateString.includes(' ')) {
+      // Database format like "2025-01-15 10:30:00"
+      date = new Date(dateString.replace(' ', 'T') + 'Z');
+    } else {
+      // Try direct parsing
+      date = new Date(dateString);
+    }
+
+    // Check if date is invalid
+    if (isNaN(date.getTime())) {
+      console.warn('Invalid date string:', dateString);
+      return 'Invalid Date';
+    }
+  } catch (error) {
+    console.warn('Error parsing date:', dateString, error);
+    return 'Invalid Date';
+  }
+
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -35,7 +60,7 @@ export const formatRelativeTime = (dateString: string): string => {
   } else if (diffDays < 7) {
     return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
   } else {
-    return formatDate(dateString);
+    return formatDate(date.toISOString());
   }
 };
 
@@ -44,7 +69,7 @@ export const isOnline = (lastCheckin: string): boolean => {
   const now = new Date();
   const diffMs = now.getTime() - lastCheck.getTime();
   const diffMins = Math.floor(diffMs / 60000);
-  return diffMins < 10; // Consider online if checked in within 10 minutes
+  return diffMins < 15; // Consider online if checked in within 15 minutes (allows for 5min check-in + buffer)
 };
 
 // Size formatting utilities
@@ -103,11 +128,14 @@ export const getSeverityColor = (severity: string): string => {
   switch (severity) {
     case 'critical':
       return 'text-danger-600 bg-danger-100';
+    case 'important':
     case 'high':
       return 'text-warning-600 bg-warning-100';
+    case 'moderate':
     case 'medium':
       return 'text-blue-600 bg-blue-100';
     case 'low':
+    case 'none':
       return 'text-gray-600 bg-gray-100';
     default:
       return 'text-gray-600 bg-gray-100';
@@ -194,7 +222,7 @@ export const debounce = <T extends (...args: any[]) => any>(
   func: T,
   wait: number
 ): ((...args: Parameters<T>) => void) => {
-  let timeout: NodeJS.Timeout;
+  let timeout: ReturnType<typeof setTimeout>;
 
   return (...args: Parameters<T>) => {
     clearTimeout(timeout);

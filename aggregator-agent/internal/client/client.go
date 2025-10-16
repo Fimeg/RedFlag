@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -219,18 +220,17 @@ func (c *Client) ReportLog(agentID uuid.UUID, report LogReport) error {
 	return nil
 }
 
-// DetectSystem returns basic system information
+// DetectSystem returns basic system information (deprecated, use system.GetSystemInfo instead)
 func DetectSystem() (osType, osVersion, osArch string) {
 	osType = runtime.GOOS
 	osArch = runtime.GOARCH
 
-	// Read OS version (simplified for now)
+	// Read OS version
 	switch osType {
 	case "linux":
 		data, _ := os.ReadFile("/etc/os-release")
 		if data != nil {
-			// Parse os-release file (simplified)
-			osVersion = "Linux"
+			osVersion = parseOSRelease(data)
 		}
 	case "windows":
 		osVersion = "Windows"
@@ -239,4 +239,39 @@ func DetectSystem() (osType, osVersion, osArch string) {
 	}
 
 	return
+}
+
+// parseOSRelease parses /etc/os-release to get proper distro name
+func parseOSRelease(data []byte) string {
+	lines := strings.Split(string(data), "\n")
+	id := ""
+	prettyName := ""
+	version := ""
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ID=") {
+			id = strings.Trim(strings.TrimPrefix(line, "ID="), "\"")
+		}
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			prettyName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+		}
+		if strings.HasPrefix(line, "VERSION_ID=") {
+			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+		}
+	}
+
+	// Prefer PRETTY_NAME if available
+	if prettyName != "" {
+		return prettyName
+	}
+
+	// Fall back to ID + VERSION
+	if id != "" {
+		if version != "" {
+			return strings.Title(id) + " " + version
+		}
+		return strings.Title(id)
+	}
+
+	return "Linux"
 }

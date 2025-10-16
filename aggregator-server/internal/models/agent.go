@@ -23,6 +23,22 @@ type Agent struct {
 	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
 }
 
+// AgentWithLastScan extends Agent with last scan information
+type AgentWithLastScan struct {
+	ID             uuid.UUID  `json:"id" db:"id"`
+	Hostname       string     `json:"hostname" db:"hostname"`
+	OSType         string     `json:"os_type" db:"os_type"`
+	OSVersion      string     `json:"os_version" db:"os_version"`
+	OSArchitecture string     `json:"os_architecture" db:"os_architecture"`
+	AgentVersion   string     `json:"agent_version" db:"agent_version"`
+	LastSeen       time.Time  `json:"last_seen" db:"last_seen"`
+	Status         string     `json:"status" db:"status"`
+	Metadata       JSONB      `json:"metadata" db:"metadata"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	LastScan       *time.Time `json:"last_scan" db:"last_scan"`
+}
+
 // AgentSpecs represents system specifications for an agent
 type AgentSpecs struct {
 	ID                uuid.UUID       `json:"id" db:"id"`
@@ -54,6 +70,28 @@ type AgentRegistrationResponse struct {
 	AgentID uuid.UUID              `json:"agent_id"`
 	Token   string                 `json:"token"`
 	Config  map[string]interface{} `json:"config"`
+}
+
+// UTCTime is a time.Time that marshals to ISO format with UTC timezone
+type UTCTime time.Time
+
+// MarshalJSON implements json.Marshaler for UTCTime
+func (t UTCTime) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Time(t).UTC().Format("2006-01-02T15:04:05.000Z"))
+}
+
+// UnmarshalJSON implements json.Unmarshaler for UTCTime
+func (t *UTCTime) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := time.Parse("2006-01-02T15:04:05.000Z", s)
+	if err != nil {
+		return err
+	}
+	*t = UTCTime(parsed)
+	return nil
 }
 
 // JSONB type for PostgreSQL JSONB columns
