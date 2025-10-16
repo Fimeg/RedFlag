@@ -11,14 +11,18 @@ export interface Agent {
   hostname: string;
   os_type: string;
   os_version: string;
-  architecture: string;
-  status: 'online' | 'offline';
-  last_checkin: string;
+  os_architecture: string;
+  architecture: string; // For backward compatibility
+  agent_version: string;
+  version: string; // For backward compatibility
+  last_seen: string;
+  last_checkin: string; // For backward compatibility
   last_scan: string | null;
+  status: 'online' | 'offline';
   created_at: string;
   updated_at: string;
-  version: string;
-  ip_address: string;
+  metadata?: Record<string, any>;
+  // Note: ip_address not available from API yet
 }
 
 export interface AgentSpec {
@@ -59,6 +63,97 @@ export interface DockerUpdateInfo {
   tag: string;
   registry: string;
   size_bytes: number;
+}
+
+// Docker-specific types for dedicated Docker module
+export interface DockerContainer {
+  id: string;
+  agent_id: string;
+  name: string;
+  image_id: string;
+  image_name: string;
+  image_tag: string;
+  status: 'running' | 'stopped' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead';
+  created_at: string;
+  started_at: string | null;
+  ports: DockerPort[];
+  volumes: DockerVolume[];
+  labels: Record<string, string>;
+  metadata: Record<string, any>;
+}
+
+export interface DockerImage {
+  id: string;
+  agent_id: string;
+  repository: string;
+  tag: string;
+  digest: string;
+  size_bytes: number;
+  created_at: string;
+  last_pulled: string | null;
+  update_available: boolean;
+  current_version: string;
+  available_version: string | null;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  status: 'up-to-date' | 'update-available' | 'update-approved' | 'update-scheduled' | 'update-installing' | 'update-failed';
+  update_approved_at: string | null;
+  update_scheduled_at: string | null;
+  update_installed_at: string | null;
+  metadata: Record<string, any>;
+}
+
+export interface DockerPort {
+  container_port: number;
+  host_port: number | null;
+  protocol: 'tcp' | 'udp';
+  host_ip: string;
+}
+
+export interface DockerVolume {
+  name: string;
+  source: string;
+  destination: string;
+  mode: 'ro' | 'rw';
+  driver: string;
+}
+
+// Docker API response types
+export interface DockerContainerListResponse {
+  containers: DockerContainer[];
+  images: DockerImage[];
+  total_containers: number;
+  total_images: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface DockerStats {
+  total_containers: number;
+  running_containers: number;
+  stopped_containers: number;
+  total_images: number;
+  images_with_updates: number;
+  critical_updates: number;
+  high_updates: number;
+  medium_updates: number;
+  low_updates: number;
+  agents_with_docker: number;
+  total_storage_used: number;
+}
+
+// Docker action types
+export interface DockerUpdateRequest {
+  image_id: string;
+  scheduled_at?: string;
+}
+
+export interface BulkDockerUpdateRequest {
+  updates: Array<{
+    container_id: string;
+    image_id: string;
+  }>;
+  scheduled_at?: string;
 }
 
 export interface AptUpdateInfo {
@@ -122,6 +217,22 @@ export interface AgentListResponse {
 export interface UpdateListResponse {
   updates: UpdatePackage[];
   total: number;
+  page: number;
+  page_size: number;
+  stats?: UpdateStats;
+}
+
+export interface UpdateStats {
+  total_updates: number;
+  pending_updates: number;
+  approved_updates: number;
+  updated_updates: number;
+  failed_updates: number;
+  critical_updates: number;
+  high_updates: number;
+  important_updates: number;
+  moderate_updates: number;
+  low_updates: number;
 }
 
 export interface UpdateApprovalRequest {
@@ -142,6 +253,7 @@ export interface ListQueryParams {
   severity?: string;
   type?: string;
   search?: string;
+  agent?: string;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
 }

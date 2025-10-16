@@ -79,10 +79,87 @@ type UpdateLogRequest struct {
 
 // UpdateFilters for querying updates
 type UpdateFilters struct {
-	AgentID     *uuid.UUID
+	AgentID     uuid.UUID
 	Status      string
 	Severity    string
 	PackageType string
 	Page        int
 	PageSize    int
+}
+
+// EVENT SOURCING MODELS
+
+// UpdateEvent represents a single update event in the event sourcing system
+type UpdateEvent struct {
+	ID               uuid.UUID `json:"id" db:"id"`
+	AgentID          uuid.UUID `json:"agent_id" db:"agent_id"`
+	PackageType      string    `json:"package_type" db:"package_type"`
+	PackageName      string    `json:"package_name" db:"package_name"`
+	VersionFrom      string    `json:"version_from" db:"version_from"`
+	VersionTo        string    `json:"version_to" db:"version_to"`
+	Severity         string    `json:"severity" db:"severity"`
+	RepositorySource string    `json:"repository_source" db:"repository_source"`
+	Metadata         JSONB     `json:"metadata" db:"metadata"`
+	EventType        string    `json:"event_type" db:"event_type"`
+	CreatedAt        time.Time `json:"created_at" db:"created_at"`
+}
+
+// UpdateState represents the current state of a package (denormalized for queries)
+type UpdateState struct {
+	ID                uuid.UUID `json:"id" db:"id"`
+	AgentID           uuid.UUID `json:"agent_id" db:"agent_id"`
+	PackageType       string    `json:"package_type" db:"package_type"`
+	PackageName       string    `json:"package_name" db:"package_name"`
+	CurrentVersion    string    `json:"current_version" db:"current_version"`
+	AvailableVersion  string    `json:"available_version" db:"available_version"`
+	Severity          string    `json:"severity" db:"severity"`
+	RepositorySource  string    `json:"repository_source" db:"repository_source"`
+	Metadata          JSONB     `json:"metadata" db:"metadata"`
+	LastDiscoveredAt  time.Time `json:"last_discovered_at" db:"last_discovered_at"`
+	LastUpdatedAt     time.Time `json:"last_updated_at" db:"last_updated_at"`
+	Status            string    `json:"status" db:"status"`
+}
+
+// UpdateHistory represents the version history of a package
+type UpdateHistory struct {
+	ID                uuid.UUID  `json:"id" db:"id"`
+	AgentID           uuid.UUID  `json:"agent_id" db:"agent_id"`
+	PackageType       string     `json:"package_type" db:"package_type"`
+	PackageName       string     `json:"package_name" db:"package_name"`
+	VersionFrom       string     `json:"version_from" db:"version_from"`
+	VersionTo         string     `json:"version_to" db:"version_to"`
+	Severity          string     `json:"severity" db:"severity"`
+	RepositorySource  string     `json:"repository_source" db:"repository_source"`
+	Metadata          JSONB      `json:"metadata" db:"metadata"`
+	UpdateInitiatedAt *time.Time `json:"update_initiated_at" db:"update_initiated_at"`
+	UpdateCompletedAt time.Time  `json:"update_completed_at" db:"update_completed_at"`
+	UpdateStatus      string     `json:"update_status" db:"update_status"`
+	FailureReason     string     `json:"failure_reason" db:"failure_reason"`
+}
+
+// UpdateBatch represents a batch of update events
+type UpdateBatch struct {
+	ID            uuid.UUID `json:"id" db:"id"`
+	AgentID       uuid.UUID `json:"agent_id" db:"agent_id"`
+	BatchSize     int       `json:"batch_size" db:"batch_size"`
+	ProcessedCount int      `json:"processed_count" db:"processed_count"`
+	FailedCount   int       `json:"failed_count" db:"failed_count"`
+	Status        string    `json:"status" db:"status"`
+	ErrorDetails  JSONB     `json:"error_details" db:"error_details"`
+	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+	CompletedAt   *time.Time `json:"completed_at" db:"completed_at"`
+}
+
+// UpdateStats represents statistics about updates
+type UpdateStats struct {
+	TotalUpdates     int `json:"total_updates" db:"total_updates"`
+	PendingUpdates   int `json:"pending_updates" db:"pending_updates"`
+	ApprovedUpdates  int `json:"approved_updates" db:"approved_updates"`
+	UpdatedUpdates   int `json:"updated_updates" db:"updated_updates"`
+	FailedUpdates    int `json:"failed_updates" db:"failed_updates"`
+	CriticalUpdates  int `json:"critical_updates" db:"critical_updates"`
+	HighUpdates      int `json:"high_updates" db:"high_updates"`
+	ImportantUpdates int `json:"important_updates" db:"important_updates"`
+	ModerateUpdates  int `json:"moderate_updates" db:"moderate_updates"`
+	LowUpdates       int `json:"low_updates" db:"low_updates"`
 }

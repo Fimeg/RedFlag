@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 
@@ -14,6 +15,7 @@ type Config struct {
 	JWTSecret        string
 	CheckInInterval  int
 	OfflineThreshold int
+	Timezone         string
 }
 
 // Load reads configuration from environment variables
@@ -24,13 +26,21 @@ func Load() (*Config, error) {
 	checkInInterval, _ := strconv.Atoi(getEnv("CHECK_IN_INTERVAL", "300"))
 	offlineThreshold, _ := strconv.Atoi(getEnv("OFFLINE_THRESHOLD", "600"))
 
-	return &Config{
+	cfg := &Config{
 		ServerPort:       getEnv("SERVER_PORT", "8080"),
 		DatabaseURL:      getEnv("DATABASE_URL", "postgres://aggregator:aggregator@localhost:5432/aggregator?sslmode=disable"),
-		JWTSecret:        getEnv("JWT_SECRET", "change-me-in-production"),
+		JWTSecret:        getEnv("JWT_SECRET", "test-secret-for-development-only"),
 		CheckInInterval:  checkInInterval,
 		OfflineThreshold: offlineThreshold,
-	}, nil
+		Timezone:         getEnv("TIMEZONE", "UTC"),
+	}
+
+	// Debug: Log what JWT secret we're using (remove in production)
+	if cfg.JWTSecret == "test-secret-for-development-only" {
+		fmt.Printf("🔓 Using development JWT secret\n")
+	}
+
+	return cfg, nil
 }
 
 func getEnv(key, defaultValue string) string {

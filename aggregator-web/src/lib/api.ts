@@ -8,13 +8,21 @@ import {
   UpdateApprovalRequest,
   ScanRequest,
   ListQueryParams,
-  ApiResponse,
-  ApiError
+  ApiError,
+  DockerContainer,
+  DockerImage,
+  DockerContainerListResponse,
+  DockerStats,
+  DockerUpdateRequest,
+  BulkDockerUpdateRequest
 } from '@/types';
+
+// Base URL for API
+export const API_BASE_URL = (import.meta.env?.VITE_API_URL as string) || '/api/v1';
 
 // Create axios instance
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -65,6 +73,11 @@ export const agentApi = {
   // Trigger scan on single agent
   scanAgent: async (id: string): Promise<void> => {
     await api.post(`/agents/${id}/scan`);
+  },
+
+  // Unregister/remove agent
+  unregisterAgent: async (id: string): Promise<void> => {
+    await api.delete(`/agents/${id}`);
   },
 };
 
@@ -178,7 +191,7 @@ export const handleApiError = (error: any): ApiError => {
       };
     }
 
-    if (status >= 500) {
+    if (status && status >= 500) {
       return {
         message: 'Server error. Please try again later.',
         code: 'SERVER_ERROR',
@@ -196,6 +209,77 @@ export const handleApiError = (error: any): ApiError => {
     message: error.message || 'An unexpected error occurred',
     code: 'UNKNOWN_ERROR',
   };
+};
+
+// Docker-specific API endpoints
+export const dockerApi = {
+  // Get all Docker containers and images across all agents
+  getContainers: async (params?: {
+    page?: number;
+    page_size?: number;
+    agent?: string;
+    status?: string;
+    search?: string;
+  }): Promise<DockerContainerListResponse> => {
+    const response = await api.get('/docker/containers', { params });
+    return response.data;
+  },
+
+  // Get Docker containers for a specific agent
+  getAgentContainers: async (agentId: string, params?: {
+    page?: number;
+    page_size?: number;
+    status?: string;
+    search?: string;
+  }): Promise<DockerContainerListResponse> => {
+    const response = await api.get(`/agents/${agentId}/docker`, { params });
+    return response.data;
+  },
+
+  // Get Docker statistics
+  getStats: async (): Promise<DockerStats> => {
+    const response = await api.get('/docker/stats');
+    return response.data;
+  },
+
+  // Approve Docker image update
+  approveUpdate: async (containerId: string, imageId: string, scheduledAt?: string): Promise<void> => {
+    await api.post(`/docker/containers/${containerId}/images/${imageId}/approve`, {
+      scheduled_at: scheduledAt,
+    });
+  },
+
+  // Reject Docker image update
+  rejectUpdate: async (containerId: string, imageId: string): Promise<void> => {
+    await api.post(`/docker/containers/${containerId}/images/${imageId}/reject`);
+  },
+
+  // Install Docker image update
+  installUpdate: async (containerId: string, imageId: string): Promise<void> => {
+    await api.post(`/docker/containers/${containerId}/images/${imageId}/install`);
+  },
+
+  // Bulk approve Docker updates
+  bulkApproveUpdates: async (updates: Array<{ containerId: string; imageId: string }>, scheduledAt?: string): Promise<{ approved: number }> => {
+    const response = await api.post('/docker/updates/bulk-approve', {
+      updates,
+      scheduled_at: scheduledAt,
+    });
+    return response.data;
+  },
+
+  // Bulk reject Docker updates
+  bulkRejectUpdates: async (updates: Array<{ containerId: string; imageId: string }>): Promise<{ rejected: number }> => {
+    const response = await api.post('/docker/updates/bulk-reject', {
+      updates,
+    });
+    return response.data;
+  },
+
+  // Trigger Docker scan on agents
+  triggerScan: async (agentIds?: string[]): Promise<void> => {
+    await api.post('/docker/scan', { agent_ids: agentIds });
+  },
 };
 
 export default api;

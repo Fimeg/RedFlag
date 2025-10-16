@@ -4,22 +4,22 @@ import {
   Package,
   CheckCircle,
   XCircle,
-  Clock,
-  AlertTriangle,
   Search,
   Filter,
-  ChevronDown as ChevronDownIcon,
-  RefreshCw,
-  Calendar,
   Computer,
   ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+  Clock,
+  Calendar,
 } from 'lucide-react';
 import { useUpdates, useUpdate, useApproveUpdate, useRejectUpdate, useInstallUpdate, useApproveMultipleUpdates } from '@/hooks/useUpdates';
-import { UpdatePackage } from '@/types';
+import type { UpdatePackage } from '@/types';
 import { getSeverityColor, getStatusColor, getPackageTypeIcon, formatBytes, formatRelativeTime } from '@/lib/utils';
-import { useUpdateStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
+
 
 const Updates: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -34,6 +34,8 @@ const Updates: React.FC = () => {
   const [agentFilter, setAgentFilter] = useState(searchParams.get('agent') || '');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedUpdates, setSelectedUpdates] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
+  const [pageSize, setPageSize] = useState(100);
 
   // Store filters in URL
   useEffect(() => {
@@ -43,20 +45,24 @@ const Updates: React.FC = () => {
     if (severityFilter) params.set('severity', severityFilter);
     if (typeFilter) params.set('type', typeFilter);
     if (agentFilter) params.set('agent', agentFilter);
+    if (currentPage > 1) params.set('page', currentPage.toString());
+    if (pageSize !== 100) params.set('page_size', pageSize.toString());
 
     const newUrl = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}`;
     if (newUrl !== window.location.href) {
       window.history.replaceState({}, '', newUrl);
     }
-  }, [searchQuery, statusFilter, severityFilter, typeFilter, agentFilter]);
+  }, [searchQuery, statusFilter, severityFilter, typeFilter, agentFilter, currentPage, pageSize]);
 
   // Fetch updates list
-  const { data: updatesData, isLoading, error } = useUpdates({
+  const { data: updatesData, isPending, error } = useUpdates({
     search: searchQuery || undefined,
     status: statusFilter || undefined,
     severity: severityFilter || undefined,
     type: typeFilter || undefined,
-    agent_id: agentFilter || undefined,
+    agent: agentFilter || undefined,
+    page: currentPage,
+    page_size: pageSize,
   });
 
   // Fetch single update if ID is provided
@@ -68,7 +74,13 @@ const Updates: React.FC = () => {
   const bulkApproveMutation = useApproveMultipleUpdates();
 
   const updates = updatesData?.updates || [];
-  const selectedUpdate = selectedUpdateData || updates.find(u => u.id === id);
+  const totalCount = updatesData?.total || 0;
+  const selectedUpdate = selectedUpdateData || updates.find((u: UpdatePackage) => u.id === id);
+
+  // Pagination calculations
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const hasNextPage = currentPage < totalPages;
+  const hasPrevPage = currentPage > 1;
 
   // Handle update selection
   const handleSelectUpdate = (updateId: string, checked: boolean) => {
@@ -81,7 +93,7 @@ const Updates: React.FC = () => {
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedUpdates(updates.map(update => update.id));
+      setSelectedUpdates(updates.map((update: UpdatePackage) => update.id));
     } else {
       setSelectedUpdates([]);
     }
@@ -127,10 +139,74 @@ const Updates: React.FC = () => {
   };
 
   // Get unique values for filters
-  const statuses = [...new Set(updates.map(u => u.status))];
-  const severities = [...new Set(updates.map(u => u.severity))];
-  const types = [...new Set(updates.map(u => u.package_type))];
-  const agents = [...new Set(updates.map(u => u.agent_id))];
+  const statuses = [...new Set(updates.map((u: UpdatePackage) => u.status))];
+  const severities = [...new Set(updates.map((u: UpdatePackage) => u.severity))];
+  const types = [...new Set(updates.map((u: UpdatePackage) => u.package_type))];
+  const agents = [...new Set(updates.map((u: UpdatePackage) => u.agent_id))];
+
+  // Quick filter functions
+  const handleQuickFilter = (filter: string) => {
+    switch (filter) {
+      case 'critical':
+        setSeverityFilter('critical');
+        setStatusFilter('pending');
+        break;
+      case 'pending':
+        setStatusFilter('pending');
+        setSeverityFilter('');
+        break;
+      case 'approved':
+        setStatusFilter('approved');
+        setSeverityFilter('');
+        break;
+      default:
+        // Clear all filters
+        setStatusFilter('');
+        setSeverityFilter('');
+        setTypeFilter('');
+        setAgentFilter('');
+        break;
+    }
+    setCurrentPage(1);
+  };
+
+  // Group updates
+  const groupUpdates = (updates: UpdatePackage[], groupBy: string) => {
+    const groups: Record<string, UpdatePackage[]> = {};
+
+    updates.forEach(update => {
+      let key: string;
+      switch (groupBy) {
+        case 'severity':
+          key = update.severity;
+          break;
+        case 'type':
+          key = update.package_type;
+          break;
+        case 'status':
+          key = update.status;
+          break;
+        default:
+          key = 'all';
+      }
+
+      if (!groups[key]) {
+        groups[key] = [];
+      }
+      groups[key].push(update);
+    });
+
+    return groups;
+  };
+
+  // Get total statistics from API (not just current page)
+  const totalStats = {
+    total: totalCount,
+    pending: updatesData?.stats?.pending_updates || 0,
+    approved: updatesData?.stats?.approved_updates || 0,
+    critical: updatesData?.stats?.critical_updates || 0,
+    high: updatesData?.stats?.high_updates || 0,
+  };
 
   // Update detail view
   if (id && selectedUpdate) {
@@ -246,7 +322,7 @@ const Updates: React.FC = () => {
                   <>
                     <button
                       onClick={() => handleApproveUpdate(selectedUpdate.id)}
-                      disabled={approveMutation.isLoading}
+                      disabled={approveMutation.isPending}
                       className="w-full btn btn-success"
                     >
                       <CheckCircle className="h-4 w-4 mr-2" />
@@ -255,7 +331,7 @@ const Updates: React.FC = () => {
 
                     <button
                       onClick={() => handleRejectUpdate(selectedUpdate.id)}
-                      disabled={rejectMutation.isLoading}
+                      disabled={rejectMutation.isPending}
                       className="w-full btn btn-secondary"
                     >
                       <XCircle className="h-4 w-4 mr-2" />
@@ -267,7 +343,7 @@ const Updates: React.FC = () => {
                 {selectedUpdate.status === 'approved' && (
                   <button
                     onClick={() => handleInstallUpdate(selectedUpdate.id)}
-                    disabled={installMutation.isLoading}
+                    disabled={installMutation.isPending}
                     className="w-full btn btn-primary"
                   >
                     <Package className="h-4 w-4 mr-2" />
@@ -290,15 +366,150 @@ const Updates: React.FC = () => {
     );
   }
 
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handlePageSizeChange = (newPageSize: number) => {
+    setPageSize(newPageSize);
+    setCurrentPage(1); // Reset to first page when changing page size
+  };
+
   // Updates list view
   return (
     <div className="px-4 sm:px-6 lg:px-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Updates</h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Review and approve available updates for your agents
-        </p>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Updates</h1>
+            <p className="mt-1 text-sm text-gray-600">
+              Review and approve available updates for your agents
+            </p>
+          </div>
+          <div className="text-right">
+            <div className="text-sm text-gray-600">
+              Showing {updates.length} of {totalCount} updates
+            </div>
+            {totalCount > 100 && (
+              <select
+                value={pageSize}
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                className="mt-1 text-sm border border-gray-300 rounded px-3 py-1"
+              >
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+                <option value={200}>200 per page</option>
+                <option value={500}>500 per page</option>
+              </select>
+            )}
+          </div>
+        </div>
+
+        {/* Statistics Cards - Show total counts across all updates */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+          <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Updates</p>
+                <p className="text-2xl font-bold text-gray-900">{totalStats.total}</p>
+              </div>
+              <Package className="h-8 w-8 text-gray-400" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border border-orange-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Pending</p>
+                <p className="text-2xl font-bold text-orange-600">{totalStats.pending}</p>
+              </div>
+              <Clock className="h-8 w-8 text-orange-400" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border border-green-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Approved</p>
+                <p className="text-2xl font-bold text-green-600">{totalStats.approved}</p>
+              </div>
+              <CheckCircle className="h-8 w-8 text-green-400" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border border-red-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Critical</p>
+                <p className="text-2xl font-bold text-red-600">{totalStats.critical}</p>
+              </div>
+              <AlertTriangle className="h-8 w-8 text-red-400" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border border-yellow-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">High Priority</p>
+                <p className="text-2xl font-bold text-yellow-600">{totalStats.high}</p>
+              </div>
+              <AlertTriangle className="h-8 w-8 text-yellow-400" />
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Filters */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            onClick={() => handleQuickFilter('all')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              !statusFilter && !severityFilter && !typeFilter && !agentFilter
+                ? "bg-primary-100 border-primary-300 text-primary-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            All Updates
+          </button>
+          <button
+            onClick={() => handleQuickFilter('critical')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'pending' && severityFilter === 'critical'
+                ? "bg-red-100 border-red-300 text-red-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <AlertTriangle className="h-4 w-4 mr-1 inline" />
+            Critical
+          </button>
+          <button
+            onClick={() => handleQuickFilter('pending')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'pending' && !severityFilter
+                ? "bg-orange-100 border-orange-300 text-orange-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <Clock className="h-4 w-4 mr-1 inline" />
+            Pending Approval
+          </button>
+          <button
+            onClick={() => handleQuickFilter('approved')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'approved' && !severityFilter
+                ? "bg-green-100 border-green-300 text-green-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <CheckCircle className="h-4 w-4 mr-1 inline" />
+            Approved
+          </button>
+        </div>
       </div>
 
       {/* Search and filters */}
@@ -336,7 +547,7 @@ const Updates: React.FC = () => {
           {selectedUpdates.length > 0 && (
             <button
               onClick={handleBulkApprove}
-              disabled={bulkApproveMutation.isLoading}
+              disabled={bulkApproveMutation.isPending}
               className="btn btn-success"
             >
               <CheckCircle className="h-4 w-4 mr-2" />
@@ -359,7 +570,7 @@ const Updates: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="">All Status</option>
-                  {statuses.map(status => (
+                  {statuses.map((status: string) => (
                     <option key={status} value={status}>{status}</option>
                   ))}
                 </select>
@@ -375,7 +586,7 @@ const Updates: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="">All Severities</option>
-                  {severities.map(severity => (
+                  {severities.map((severity: string) => (
                     <option key={severity} value={severity}>{severity}</option>
                   ))}
                 </select>
@@ -391,7 +602,7 @@ const Updates: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="">All Types</option>
-                  {types.map(type => (
+                  {types.map((type: string) => (
                     <option key={type} value={type}>{type.toUpperCase()}</option>
                   ))}
                 </select>
@@ -407,7 +618,7 @@ const Updates: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="">All Agents</option>
-                  {agents.map(agentId => (
+                  {agents.map((agentId: string) => (
                     <option key={agentId} value={agentId}>{agentId}</option>
                   ))}
                 </select>
@@ -418,7 +629,7 @@ const Updates: React.FC = () => {
       </div>
 
       {/* Updates table */}
-      {isLoading ? (
+      {isPending ? (
         <div className="animate-pulse">
           <div className="bg-white rounded-lg border border-gray-200">
             {[...Array(5)].map((_, i) => (
@@ -469,7 +680,7 @@ const Updates: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {updates.map((update) => (
+                {updates.map((update: UpdatePackage) => (
                   <tr key={update.id} className="hover:bg-gray-50">
                     <td className="table-cell">
                       <input
@@ -540,7 +751,7 @@ const Updates: React.FC = () => {
                           <>
                             <button
                               onClick={() => handleApproveUpdate(update.id)}
-                              disabled={approveMutation.isLoading}
+                              disabled={approveMutation.isPending}
                               className="text-success-600 hover:text-success-800"
                               title="Approve"
                             >
@@ -548,7 +759,7 @@ const Updates: React.FC = () => {
                             </button>
                             <button
                               onClick={() => handleRejectUpdate(update.id)}
-                              disabled={rejectMutation.isLoading}
+                              disabled={rejectMutation.isPending}
                               className="text-gray-600 hover:text-gray-800"
                               title="Reject"
                             >
@@ -560,7 +771,7 @@ const Updates: React.FC = () => {
                         {update.status === 'approved' && (
                           <button
                             onClick={() => handleInstallUpdate(update.id)}
-                            disabled={installMutation.isLoading}
+                            disabled={installMutation.isPending}
                             className="text-primary-600 hover:text-primary-800"
                             title="Install"
                           >
@@ -582,6 +793,88 @@ const Updates: React.FC = () => {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
+              <div className="flex items-center justify-between">
+                <div className="flex-1 flex justify-between sm:hidden">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={!hasPrevPage}
+                    className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={!hasNextPage}
+                    className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+                <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm text-gray-700">
+                      Showing <span className="font-medium">{(currentPage - 1) * pageSize + 1}</span> to{' '}
+                      <span className="font-medium">{Math.min(currentPage * pageSize, totalCount)}</span> of{' '}
+                      <span className="font-medium">{totalCount}</span> results
+                    </p>
+                  </div>
+                  <div>
+                    <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                      <button
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={!hasPrevPage}
+                        className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="sr-only">Previous</span>
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+
+                      {/* Page numbers */}
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => handlePageChange(pageNum)}
+                            className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                              currentPage === pageNum
+                                ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
+                                : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+
+                      <button
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={!hasNextPage}
+                        className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="sr-only">Next</span>
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </nav>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

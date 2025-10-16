@@ -5,21 +5,22 @@ import {
   RefreshCw,
   Search,
   Filter,
-  ChevronDown,
   ChevronRight as ChevronRightIcon,
   Activity,
-  HardDrive,
-  Cpu,
-  Globe,
-  MapPin,
   Calendar,
   Package,
+  Cpu,
+  HardDrive,
+  MemoryStick,
+  GitBranch,
+  Clock,
+  Trash2,
 } from 'lucide-react';
-import { useAgents, useAgent, useScanAgent, useScanMultipleAgents } from '@/hooks/useAgents';
-import { Agent } from '@/types';
+import { useAgents, useAgent, useScanAgent, useScanMultipleAgents, useUnregisterAgent } from '@/hooks/useAgents';
 import { getStatusColor, formatRelativeTime, isOnline, formatBytes } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
+import { AgentSystemUpdates } from '@/components/AgentUpdates';
 
 const Agents: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -30,8 +31,81 @@ const Agents: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
 
+  // Helper function to get system metadata from agent
+  const getSystemMetadata = (agent: any) => {
+    const metadata = agent.metadata || {};
+
+    return {
+      cpuModel: metadata.cpu_model || 'Unknown',
+      cpuCores: metadata.cpu_cores || 'Unknown',
+      memoryTotal: metadata.memory_total ? parseInt(metadata.memory_total) : 0,
+      diskMount: metadata.disk_mount || 'Unknown',
+      diskTotal: metadata.disk_total ? parseInt(metadata.disk_total) : 0,
+      diskUsed: metadata.disk_used ? parseInt(metadata.disk_used) : 0,
+      processes: metadata.processes || 'Unknown',
+      uptime: metadata.uptime || 'Unknown',
+      installationTime: metadata.installation_time || 'Unknown',
+    };
+  };
+
+  // Helper function to parse OS information
+  const parseOSInfo = (agent: any) => {
+    const osType = agent.os_type || '';
+    const osVersion = agent.os_version || '';
+
+    // Extract platform and distribution
+    let platform = osType;
+    let distribution = '';
+    let version = osVersion;
+
+    // Handle Linux distributions
+    if (osType.toLowerCase().includes('linux')) {
+      platform = 'Linux';
+      // Try to extract distribution from version string
+      if (osVersion.toLowerCase().includes('ubuntu')) {
+        distribution = 'Ubuntu';
+        version = osVersion.replace(/ubuntu/i, '').trim();
+      } else if (osVersion.toLowerCase().includes('fedora')) {
+        distribution = 'Fedora';
+        version = osVersion.replace(/fedora/i, '').trim();
+      } else if (osVersion.toLowerCase().includes('debian')) {
+        distribution = 'Debian';
+        version = osVersion.replace(/debian/i, '').trim();
+      } else if (osVersion.toLowerCase().includes('centos')) {
+        distribution = 'CentOS';
+        version = osVersion.replace(/centos/i, '').trim();
+      } else if (osVersion.toLowerCase().includes('proxmox')) {
+        distribution = 'Proxmox';
+        version = osVersion.replace(/proxmox/i, '').trim();
+      } else if (osVersion.toLowerCase().includes('arch')) {
+        distribution = 'Arch Linux';
+        version = osVersion.replace(/arch/i, '').trim();
+      } else {
+        // Try to get first word as distribution
+        const words = osVersion.split(' ');
+        distribution = words[0] || 'Unknown Distribution';
+        version = words.slice(1).join(' ');
+      }
+    } else if (osType.toLowerCase().includes('windows')) {
+      platform = 'Windows';
+      distribution = osVersion; // Windows version info is all in one field
+      version = '';
+    } else if (osType.toLowerCase().includes('darwin') || osType.toLowerCase().includes('macos')) {
+      platform = 'macOS';
+      distribution = 'macOS';
+      version = osVersion;
+    }
+
+    // Truncate long version strings
+    if (version.length > 30) {
+      version = version.substring(0, 30) + '...';
+    }
+
+    return { platform, distribution, version: version.trim() };
+  };
+
   // Fetch agents list
-  const { data: agentsData, isLoading, error } = useAgents({
+  const { data: agentsData, isPending, error } = useAgents({
     search: searchQuery || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
   });
@@ -41,6 +115,7 @@ const Agents: React.FC = () => {
 
   const scanAgentMutation = useScanAgent();
   const scanMultipleMutation = useScanMultipleAgents();
+  const unregisterAgentMutation = useUnregisterAgent();
 
   const agents = agentsData?.agents || [];
   const selectedAgent = selectedAgentData || agents.find(a => a.id === id);
@@ -93,6 +168,27 @@ const Agents: React.FC = () => {
     }
   };
 
+  // Handle agent removal
+  const handleRemoveAgent = async (agentId: string, hostname: string) => {
+    if (!window.confirm(
+      `Are you sure you want to remove agent "${hostname}"? This action cannot be undone and will remove the agent from the system.`
+    )) {
+      return;
+    }
+
+    try {
+      await unregisterAgentMutation.mutateAsync(agentId);
+      toast.success(`Agent "${hostname}" removed successfully`);
+
+      // Navigate back to agents list if we're on the agent detail page
+      if (id && id === agentId) {
+        navigate('/agents');
+      }
+    } catch (error) {
+      // Error handling is done in the hook
+    }
+  };
+
   // Get unique OS types for filter
   const osTypes = [...new Set(agents.map(agent => agent.os_type))];
 
@@ -109,19 +205,19 @@ const Agents: React.FC = () => {
           </button>
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">
+              <h1 className="text-3xl font-bold text-gray-900">
                 {selectedAgent.hostname}
               </h1>
-              <p className="mt-1 text-sm text-gray-600">
-                Agent details and system information
+              <p className="mt-2 text-sm text-gray-600">
+                System details and update management for this agent
               </p>
             </div>
             <button
               onClick={() => handleScanAgent(selectedAgent.id)}
-              disabled={scanAgentMutation.isLoading}
+              disabled={scanAgentMutation.isPending}
               className="btn btn-primary"
             >
-              {scanAgentMutation.isLoading ? (
+              {scanAgentMutation.isPending ? (
                 <RefreshCw className="animate-spin h-4 w-4 mr-2" />
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -134,36 +230,84 @@ const Agents: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Agent info */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Status card */}
+            {/* Agent Status Card */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-medium text-gray-900">Status</h2>
-                <span className={cn('badge', getStatusColor(selectedAgent.status))}>
-                  {selectedAgent.status}
+                <h2 className="text-lg font-medium text-gray-900">Agent Status</h2>
+                <span className={cn('badge', getStatusColor(isOnline(selectedAgent.last_seen) ? 'online' : 'offline'))}>
+                  {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-2 text-sm text-gray-600">
-                    <Activity className="h-4 w-4" />
-                    <span>Last Check-in:</span>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Agent Information */}
+                <div className="space-y-4">
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <h3 className="text-sm font-medium text-gray-900 mb-3">Agent Information</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs text-gray-500">Agent ID</p>
+                        <p className="text-xs font-mono text-gray-700 break-all">
+                          {selectedAgent.id}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-xs text-gray-500">Version</p>
+                          <p className="text-xs font-medium text-gray-900">
+                            {selectedAgent.agent_version || selectedAgent.version || 'Unknown'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Registered</p>
+                          <p className="text-xs font-medium text-gray-900">
+                            {formatRelativeTime(selectedAgent.created_at)}
+                          </p>
+                        </div>
+                      </div>
+                      {(() => {
+                        const meta = getSystemMetadata(selectedAgent);
+                        if (meta.installationTime !== 'Unknown') {
+                          return (
+                            <div>
+                              <p className="text-xs text-gray-500">Installation Time</p>
+                              <p className="text-xs font-medium text-gray-900">
+                                {formatRelativeTime(meta.installationTime)}
+                              </p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
                   </div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {formatRelativeTime(selectedAgent.last_checkin)}
-                  </p>
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-2 text-sm text-gray-600">
-                    <Calendar className="h-4 w-4" />
-                    <span>Last Scan:</span>
+                {/* Connection Status */}
+                <div className="space-y-4">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center space-x-2 text-sm text-gray-600">
+                        <Activity className="h-4 w-4" />
+                        <span>Last Check-in</span>
+                      </div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {formatRelativeTime(selectedAgent.last_seen)}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center space-x-2 text-sm text-gray-600">
+                        <Calendar className="h-4 w-4" />
+                        <span>Last Scan</span>
+                      </div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {selectedAgent.last_scan
+                          ? formatRelativeTime(selectedAgent.last_scan)
+                          : 'Never'}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {selectedAgent.last_scan
-                      ? formatRelativeTime(selectedAgent.last_scan)
-                      : 'Never'}
-                  </p>
                 </div>
               </div>
             </div>
@@ -172,47 +316,134 @@ const Agents: React.FC = () => {
             <div className="card">
               <h2 className="text-lg font-medium text-gray-900 mb-4">System Information</h2>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Basic System Info */}
                 <div className="space-y-4">
                   <div>
-                    <p className="text-sm text-gray-600">Operating System</p>
+                    <p className="text-sm text-gray-600">Platform</p>
                     <p className="text-sm font-medium text-gray-900">
-                      {selectedAgent.os_type} {selectedAgent.os_version}
+                      {(() => {
+                        const osInfo = parseOSInfo(selectedAgent);
+                        return osInfo.platform;
+                      })()}
                     </p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-gray-600">Distribution</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {(() => {
+                        const osInfo = parseOSInfo(selectedAgent);
+                        return osInfo.distribution;
+                      })()}
+                    </p>
+                    {(() => {
+                      const osInfo = parseOSInfo(selectedAgent);
+                      if (osInfo.version) {
+                        return (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Version: {osInfo.version}
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
 
                   <div>
                     <p className="text-sm text-gray-600">Architecture</p>
                     <p className="text-sm font-medium text-gray-900">
-                      {selectedAgent.architecture}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-sm text-gray-600">IP Address</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {selectedAgent.ip_address}
+                      {selectedAgent.os_architecture || selectedAgent.architecture}
                     </p>
                   </div>
                 </div>
 
+                {/* Hardware Specs */}
                 <div className="space-y-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Agent Version</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {selectedAgent.version}
-                    </p>
-                  </div>
+                  {(() => {
+                    const meta = getSystemMetadata(selectedAgent);
+                    return (
+                      <>
+                        <div>
+                          <p className="text-sm text-gray-600 flex items-center">
+                            <Cpu className="h-4 w-4 mr-1" />
+                            CPU
+                          </p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {meta.cpuModel}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {meta.cpuCores} cores
+                          </p>
+                        </div>
 
-                  <div>
-                    <p className="text-sm text-gray-600">Registered</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {formatRelativeTime(selectedAgent.created_at)}
-                    </p>
-                  </div>
+                        {meta.memoryTotal > 0 && (
+                          <div>
+                            <p className="text-sm text-gray-600 flex items-center">
+                              <MemoryStick className="h-4 w-4 mr-1" />
+                              Memory
+                            </p>
+                            <p className="text-sm font-medium text-gray-900">
+                              {formatBytes(meta.memoryTotal)}
+                            </p>
+                          </div>
+                        )}
+
+                        {meta.diskTotal > 0 && (
+                          <div>
+                            <p className="text-sm text-gray-600 flex items-center">
+                              <HardDrive className="h-4 w-4 mr-1" />
+                              Disk ({meta.diskMount})
+                            </p>
+                            <p className="text-sm font-medium text-gray-900">
+                              {formatBytes(meta.diskUsed)} / {formatBytes(meta.diskTotal)}
+                            </p>
+                            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                              <div
+                                className="bg-blue-600 h-2 rounded-full"
+                                style={{ width: `${Math.round((meta.diskUsed / meta.diskTotal) * 100)}%` }}
+                              ></div>
+                            </div>
+                            <p className="text-xs text-gray-500">
+                              {Math.round((meta.diskUsed / meta.diskTotal) * 100)}% used
+                            </p>
+                          </div>
+                        )}
+
+                        {meta.processes !== 'Unknown' && (
+                          <div>
+                            <p className="text-sm text-gray-600 flex items-center">
+                              <GitBranch className="h-4 w-4 mr-1" />
+                              Running Processes
+                            </p>
+                            <p className="text-sm font-medium text-gray-900">
+                              {meta.processes}
+                            </p>
+                          </div>
+                        )}
+
+                        {meta.uptime !== 'Unknown' && (
+                          <div>
+                            <p className="text-sm text-gray-600 flex items-center">
+                              <Clock className="h-4 w-4 mr-1" />
+                              Uptime
+                            </p>
+                            <p className="text-sm font-medium text-gray-900">
+                              {meta.uptime}
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
-            </div>
+
+              </div>
+
+              {/* System Updates */}
+              <AgentSystemUpdates agentId={selectedAgent.id} />
+
           </div>
 
           {/* Quick actions */}
@@ -222,24 +453,24 @@ const Agents: React.FC = () => {
 
               <div className="space-y-3">
                 <button
-                  onClick={() => handleScanAgent(selectedAgent.id)}
-                  disabled={scanAgentMutation.isLoading}
-                  className="w-full btn btn-primary"
-                >
-                  {scanAgentMutation.isLoading ? (
-                    <RefreshCw className="animate-spin h-4 w-4 mr-2" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  Trigger Scan
-                </button>
-
-                <button
                   onClick={() => navigate(`/updates?agent=${selectedAgent.id}`)}
                   className="w-full btn btn-secondary"
                 >
                   <Package className="h-4 w-4 mr-2" />
-                  View Updates
+                  View All Updates
+                </button>
+
+                <button
+                  onClick={() => handleRemoveAgent(selectedAgent.id, selectedAgent.hostname)}
+                  disabled={unregisterAgentMutation.isPending}
+                  className="w-full btn btn-danger"
+                >
+                  {unregisterAgentMutation.isPending ? (
+                    <RefreshCw className="animate-spin h-4 w-4 mr-2" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 mr-2" />
+                  )}
+                  Remove Agent
                 </button>
               </div>
             </div>
@@ -298,10 +529,10 @@ const Agents: React.FC = () => {
           {selectedAgents.length > 0 && (
             <button
               onClick={handleScanSelected}
-              disabled={scanMultipleMutation.isLoading}
+              disabled={scanMultipleMutation.isPending}
               className="btn btn-primary"
             >
-              {scanMultipleMutation.isLoading ? (
+              {scanMultipleMutation.isPending ? (
                 <RefreshCw className="animate-spin h-4 w-4 mr-2" />
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -351,7 +582,7 @@ const Agents: React.FC = () => {
       </div>
 
       {/* Agents table */}
-      {isLoading ? (
+      {isPending ? (
         <div className="animate-pulse">
           <div className="bg-white rounded-lg border border-gray-200">
             {[...Array(5)].map((_, i) => (
@@ -401,7 +632,7 @@ const Agents: React.FC = () => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredAgents.map((agent) => (
-                  <tr key={agent.id} className="hover:bg-gray-50">
+                  <tr key={agent.id} className="hover:bg-gray-50 group">
                     <td className="table-cell">
                       <input
                         type="checkbox"
@@ -425,30 +656,46 @@ const Agents: React.FC = () => {
                             </button>
                           </div>
                           <div className="text-xs text-gray-500">
-                            {agent.ip_address}
+                            {agent.metadata && (() => {
+                              const meta = getSystemMetadata(agent);
+                              const parts = [];
+                              if (meta.cpuCores !== 'Unknown') parts.push(`${meta.cpuCores} cores`);
+                              if (meta.memoryTotal > 0) parts.push(formatBytes(meta.memoryTotal));
+                              if (parts.length > 0) return parts.join(' • ');
+                              return 'System info available';
+                            })()}
                           </div>
                         </div>
                       </div>
                     </td>
                     <td className="table-cell">
-                      <span className={cn('badge', getStatusColor(agent.status))}>
-                        {agent.status}
+                      <span className={cn('badge', getStatusColor(isOnline(agent.last_seen) ? 'online' : 'offline'))}>
+                        {isOnline(agent.last_seen) ? 'Online' : 'Offline'}
                       </span>
                     </td>
                     <td className="table-cell">
                       <div className="text-sm text-gray-900">
-                        {agent.os_type}
+                        {(() => {
+                          const osInfo = parseOSInfo(agent);
+                          return osInfo.distribution || agent.os_type;
+                        })()}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {agent.architecture}
+                        {(() => {
+                          const osInfo = parseOSInfo(agent);
+                          if (osInfo.version) {
+                            return `${osInfo.version} • ${agent.os_architecture || agent.architecture}`;
+                          }
+                          return `${agent.os_architecture || agent.architecture}`;
+                        })()}
                       </div>
                     </td>
                     <td className="table-cell">
                       <div className="text-sm text-gray-900">
-                        {formatRelativeTime(agent.last_checkin)}
+                        {formatRelativeTime(agent.last_seen)}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {isOnline(agent.last_checkin) ? 'Online' : 'Offline'}
+                        {isOnline(agent.last_seen) ? 'Online' : 'Offline'}
                       </div>
                     </td>
                     <td className="table-cell">
@@ -462,11 +709,19 @@ const Agents: React.FC = () => {
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => handleScanAgent(agent.id)}
-                          disabled={scanAgentMutation.isLoading}
+                          disabled={scanAgentMutation.isPending}
                           className="text-gray-400 hover:text-primary-600"
                           title="Trigger scan"
                         >
                           <RefreshCw className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleRemoveAgent(agent.id, agent.hostname)}
+                          disabled={unregisterAgentMutation.isPending}
+                          className="text-gray-400 hover:text-red-600"
+                          title="Remove agent"
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => navigate(`/agents/${agent.id}`)}

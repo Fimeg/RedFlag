@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bell, X, Check, Info, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Bell, X, Info, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { useRealtimeStore } from '@/lib/store';
 import { cn, formatRelativeTime } from '@/lib/utils';
 
@@ -36,7 +36,7 @@ const NotificationCenter: React.FC = () => {
   };
 
   return (
-    <div className="fixed top-4 right-4 z-50">
+    <div className="fixed top-4 right-4 z-40">
       {/* Notification bell */}
       <button
         onClick={() => setIsOpen(!isOpen)}
