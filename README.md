@@ -52,33 +52,20 @@ A self-hosted, cross-platform update management platform built with:
 
 ## Screenshots
 
-### Main Dashboard
-![Main Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png)
-Overview showing agent status, system metrics, and update statistics
+| Overview | Updates Management | Agent List |
+|----------|-------------------|------------|
+| ![Main Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png) | ![Updates Dashboard](Screenshots/RedFlag%20Updates%20Dashboard.png) | ![Agent List](Screenshots/RedFlag%20Agent%20List.png) |
+| System overview with metrics | Update approval with dependency workflow | Cross-platform agent management |
 
-### Updates Management
-![Updates Dashboard](Screenshots/RedFlag%20Updates%20Dashboard.png)
-Comprehensive update listing with filtering, approval, and dependency confirmation
+| Linux Agent Details | Windows Agent Details | History & Audit |
+|-------------------|---------------------|----------------|
+| ![Linux Agent Details](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Windows Agent Details](Screenshots/RedFlag%20Windows%20Agent%20Details.png) | ![History Dashboard](Screenshots/RedFlag%20History%20Dashboard.png) |
+| Linux system specs and updates | Windows Updates and Winget support | Complete audit trail of activities |
 
-### Agent Details
-![Agent Details](Screenshots/RedFlag%20Agent%20Details.png)
-Detailed agent information including system specs, last check-in, and individual update management
-
-### Windows Agent Support
-![Windows Agent](Screenshots/RedFlag%20Windows%20Agent%20Details.png)
-Cross-platform support for Windows Updates and Winget package management
-
-### History & Audit Trail
-![History Dashboard](Screenshots/RedFlag%20History%20Dashboard.png)
-Complete audit trail of all update activities and command execution
-
-### Live Operations
-![Live Operations](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png)
-Real-time view of update operations with success/failure tracking
-
-### Docker Container Management
-![Docker Dashboard](Screenshots/RedFlag%20Docker%20Dashboard.png)
-Docker-specific interface for container image updates and management
+| Live Operations | Docker Management |
+|-----------------|------------------|
+| ![Live Operations](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png) | ![Docker Dashboard](Screenshots/RedFlag%20Docker%20Dashboard.png) |
+| Real-time operation tracking | Container image update management |
 
 ## For Developers
 
@@ -104,9 +91,9 @@ This repository contains:
     ┌────┴────┬────────┐
     │         │        │
 ┌───▼──┐  ┌──▼──┐  ┌──▼───┐
-│Linux │  │Linux│  │Linux │
-│Agent │  │Agent│  │Agent │
-└──────┘  └─────┘  └──────┘
+│Linux │  │Windows│  │Linux │
+│Agent │  │Agent  │  │Agent │
+└──────┘  └───────┘  └──────┘
 ```
 
 ## Project Structure
@@ -117,19 +104,45 @@ RedFlag/
 │   ├── cmd/server/         # Main entry point
 │   ├── internal/
 │   │   ├── api/            # HTTP handlers & middleware
+│   │   │   └── handlers/   # API endpoint handlers
 │   │   ├── database/       # Database layer & migrations
-│   │   ├── models/         # Data models
-│   │   └── config/         # Configuration
+│   │   │   ├── migrations/ # Database schema migrations
+│   │   │   └── queries/    # Database query functions
+│   │   ├── models/         # Data models and structs
+│   │   ├── services/       # Business logic services
+│   │   ├── utils/          # Utility functions
+│   │   └── config/         # Configuration management
 │   └── go.mod
 
-├── aggregator-agent/       # Go agent
+├── aggregator-agent/       # Go agent (cross-platform)
 │   ├── cmd/agent/          # Main entry point
 │   ├── internal/
-│   │   ├── client/         # API client
-│   │   ├── installer/       # Update installers (APT, DNF, Docker)
-│   │   ├── scanner/        # Update scanners (APT, Docker, DNF/RPM)
+│   │   ├── cache/          # Local cache system for offline viewing
+│   │   ├── client/         # API client with token renewal
+│   │   ├── config/         # Configuration management
+│   │   ├── display/        # Terminal output formatting
+│   │   ├── installer/      # Update installers
+│   │   │   ├── apt.go      # APT package installer
+│   │   │   ├── dnf.go      # DNF package installer
+│   │   │   ├── docker.go   # Docker image installer
+│   │   │   ├── windows.go  # Windows installer base
+│   │   │   ├── winget.go   # Winget package installer
+│   │   │   ├── security.go # Security utilities
+│   │   │   └── sudoers.go  # Sudo management
+│   │   ├── scanner/        # Update scanners
+│   │   │   ├── apt.go      # APT package scanner
+│   │   │   ├── dnf.go      # DNF package scanner
+│   │   │   ├── docker.go   # Docker image scanner
+│   │   │   ├── registry.go # Docker registry client
+│   │   │   ├── windows.go  # Windows Update scanner
+│   │   │   ├── winget.go   # Winget package scanner
+│   │   │   └── windows_*.go # Windows Update API components
 │   │   ├── system/         # System information collection
-│   │   └── config/         # Configuration
+│   │   │   ├── info.go     # System metrics
+│   │   │   └── windows.go  # Windows system info
+│   │   └── executor/       # Command execution
+│   ├── install.sh          # Linux installation script
+│   ├── uninstall.sh        # Linux uninstallation script
 │   └── go.mod
 
 ├── aggregator-web/         # React dashboard
@@ -141,10 +154,12 @@ RedFlag/
 ## Database Schema
 
 Key Tables:
-- `agents` - Registered agents with system metadata
-- `update_packages` - Discovered updates
-- `agent_commands` - Command queue for agents
-- `update_logs` - Execution logs
+- `agents` - Registered agents with system metadata and version tracking
+- `refresh_tokens` - Long-lived refresh tokens for stable agent identity
+- `update_events` - Immutable event storage for update discoveries
+- `current_package_state` - Optimized view of current update state
+- `agent_commands` - Command queue for agents (scan, install, dry-run)
+- `update_logs` - Execution logs with detailed results
 - `agent_tags` - Agent tagging/grouping
 
 ## Configuration
@@ -164,7 +179,8 @@ Auto-generated on registration:
 {
   "server_url": "http://localhost:8080",
   "agent_id": "uuid",
-  "token": "jwt-token",
+  "token": "jwt-access-token",
+  "refresh_token": "long-lived-refresh-token",
   "check_in_interval": 300
 }
 ```
@@ -219,12 +235,34 @@ curl http://localhost:8080/api/v1/updates?status=pending
 curl -X POST http://localhost:8080/api/v1/updates/{update-id}/approve
 ```
 
+### Token Renewal (Agent Authentication)
+```bash
+# Exchange refresh token for new access token
+curl -X POST http://localhost:8080/api/v1/agents/renew \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "uuid",
+    "refresh_token": "long-lived-token"
+  }'
+```
+
+### Dependency Workflow
+```bash
+# Dry run to check dependencies (automatically triggered by install)
+curl -X POST http://localhost:8080/api/v1/updates/{update-id}/approve
+
+# Confirm dependencies and install
+curl -X POST http://localhost:8080/api/v1/updates/{update-id}/confirm-dependencies
+```
+
 ## Security
 
-- Agent Authentication: JWT tokens with 24h expiry
+- Agent Authentication: Refresh token system with 90-day sliding window + 24h access tokens
+- SHA-256 token hashing for secure storage
 - Pull-based Model: Agents poll server (firewall-friendly)
 - Command Validation: Whitelisted commands only
 - TLS Required: Production deployments must use HTTPS
+- Token Renewal: `/renew` endpoint prevents daily re-registration
 
 ## License
 

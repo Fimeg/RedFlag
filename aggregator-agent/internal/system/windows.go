@@ -40,46 +40,95 @@ func getWindowsCPUInfo() (*CPUInfo, error) {
 
 	// Try using wmic for CPU information
 	if cmd, err := exec.LookPath("wmic"); err == nil {
-		// Get CPU name
+		// Get CPU name with better error handling
 		if data, err := exec.Command(cmd, "cpu", "get", "Name").Output(); err == nil {
-			lines := strings.Split(string(data), "\n")
+			output := string(data)
+			fmt.Printf("WMIC CPU Name output: '%s'\n", output) // Debug logging
+			lines := strings.Split(output, "\n")
 			for _, line := range lines {
-				if strings.TrimSpace(line) != "" && !strings.Contains(line, "Name") {
-					cpu.ModelName = strings.TrimSpace(line)
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.Contains(line, "Name") {
+					cpu.ModelName = line
+					fmt.Printf("Found CPU model: '%s'\n", line) // Debug logging
 					break
 				}
 			}
+		} else {
+			fmt.Printf("Failed to get CPU name via wmic: %v\n", err)
 		}
 
 		// Get number of cores
 		if data, err := exec.Command(cmd, "cpu", "get", "NumberOfCores").Output(); err == nil {
-			lines := strings.Split(string(data), "\n")
+			output := string(data)
+			fmt.Printf("WMIC CPU Cores output: '%s'\n", output) // Debug logging
+			lines := strings.Split(output, "\n")
 			for _, line := range lines {
-				if strings.TrimSpace(line) != "" && !strings.Contains(line, "NumberOfCores") {
-					if cores, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.Contains(line, "NumberOfCores") {
+					if cores, err := strconv.Atoi(line); err == nil {
 						cpu.Cores = cores
+						fmt.Printf("Found CPU cores: %d\n", cores) // Debug logging
 					}
 					break
 				}
 			}
+		} else {
+			fmt.Printf("Failed to get CPU cores via wmic: %v\n", err)
 		}
 
 		// Get number of logical processors (threads)
 		if data, err := exec.Command(cmd, "cpu", "get", "NumberOfLogicalProcessors").Output(); err == nil {
-			lines := strings.Split(string(data), "\n")
+			output := string(data)
+			fmt.Printf("WMIC CPU Threads output: '%s'\n", output) // Debug logging
+			lines := strings.Split(output, "\n")
 			for _, line := range lines {
-				if strings.TrimSpace(line) != "" && !strings.Contains(line, "NumberOfLogicalProcessors") {
-					if threads, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.Contains(line, "NumberOfLogicalProcessors") {
+					if threads, err := strconv.Atoi(line); err == nil {
 						cpu.Threads = threads
+						fmt.Printf("Found CPU threads: %d\n", threads) // Debug logging
 					}
 					break
 				}
 			}
+		} else {
+			fmt.Printf("Failed to get CPU threads via wmic: %v\n", err)
 		}
 
 		// If we couldn't get threads, assume it's equal to cores
 		if cpu.Threads == 0 {
 			cpu.Threads = cpu.Cores
+		}
+	} else {
+		fmt.Printf("WMIC command not found, unable to get CPU info\n")
+	}
+
+	// Fallback to PowerShell if wmic failed
+	if cpu.ModelName == "" {
+		fmt.Printf("Attempting PowerShell fallback for CPU info...\n")
+		if psCmd, err := exec.LookPath("powershell"); err == nil {
+			// Get CPU info via PowerShell
+			if data, err := exec.Command(psCmd, "-Command", "Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1 Name,NumberOfCores,NumberOfLogicalProcessors | ConvertTo-Json").Output(); err == nil {
+				fmt.Printf("PowerShell CPU output: '%s'\n", string(data))
+				// Try to parse JSON output (simplified)
+				output := string(data)
+				if strings.Contains(output, "Name") {
+					// Simple string extraction as fallback
+					lines := strings.Split(output, "\n")
+					for _, line := range lines {
+						if strings.Contains(line, "Name") && strings.Contains(line, ":") {
+							parts := strings.Split(line, ":")
+							if len(parts) >= 2 {
+								cpu.ModelName = strings.TrimSpace(strings.Trim(parts[1], " ,\""))
+								fmt.Printf("Found CPU via PowerShell: '%s'\n", cpu.ModelName)
+								break
+							}
+						}
+					}
+				}
+			} else {
+				fmt.Printf("PowerShell CPU info failed: %v\n", err)
+			}
 		}
 	}
 

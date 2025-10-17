@@ -222,7 +222,10 @@ func (q *UpdateQueries) SetCheckingDependencies(id uuid.UUID) error {
 	return err
 }
 
-// SetPendingDependencies marks an update as having dependencies that need approval
+// SetPendingDependencies stores dependency information and sets status based on whether dependencies exist
+// If dependencies array is empty, this function only updates metadata without changing status
+// (the handler should auto-approve and proceed to installation in this case)
+// If dependencies array has items, status is set to 'pending_dependencies' requiring manual approval
 func (q *UpdateQueries) SetPendingDependencies(agentID uuid.UUID, packageType, packageName string, dependencies []string) error {
 	// Marshal dependencies to JSON for database storage
 	depsJSON, err := json.Marshal(dependencies)
@@ -230,6 +233,9 @@ func (q *UpdateQueries) SetPendingDependencies(agentID uuid.UUID, packageType, p
 		return fmt.Errorf("failed to marshal dependencies: %w", err)
 	}
 
+	// Note: When dependencies array is empty, the handler should bypass this status change
+	// and proceed directly to installation. This function still records the empty array
+	// in metadata for audit purposes before the handler transitions to 'installing'.
 	query := `
 		UPDATE current_package_state
 		SET status = 'pending_dependencies',
