@@ -1,6 +1,7 @@
 package queries
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -207,6 +208,41 @@ func (q *UpdateQueries) InstallUpdate(id uuid.UUID) error {
 		WHERE id = $1 AND status = 'approved'
 	`
 	_, err := q.db.Exec(query, id)
+	return err
+}
+
+// SetCheckingDependencies marks an update as being checked for dependencies
+func (q *UpdateQueries) SetCheckingDependencies(id uuid.UUID) error {
+	query := `
+		UPDATE current_package_state
+		SET status = 'checking_dependencies', last_updated_at = NOW()
+		WHERE id = $1 AND status = 'approved'
+	`
+	_, err := q.db.Exec(query, id)
+	return err
+}
+
+// SetPendingDependencies marks an update as having dependencies that need approval
+func (q *UpdateQueries) SetPendingDependencies(agentID uuid.UUID, packageType, packageName string, dependencies []string) error {
+	// Marshal dependencies to JSON for database storage
+	depsJSON, err := json.Marshal(dependencies)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dependencies: %w", err)
+	}
+
+	query := `
+		UPDATE current_package_state
+		SET status = 'pending_dependencies',
+		    metadata = jsonb_set(
+				jsonb_set(metadata, '{dependencies}', $4::jsonb),
+				'{dependencies_reported_at}',
+				to_jsonb(NOW())
+		    ),
+		    last_updated_at = NOW()
+		WHERE agent_id = $1 AND package_type = $2 AND package_name = $3
+		  AND status IN ('checking_dependencies', 'installing')
+	`
+	_, err = q.db.Exec(query, agentID, packageType, packageName, depsJSON)
 	return err
 }
 
@@ -456,7 +492,7 @@ func (q *UpdateQueries) GetPackageHistory(agentID uuid.UUID, packageType, packag
 }
 
 // UpdatePackageStatus updates the status of a package and records history
-func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, packageName, status string, metadata map[string]interface{}) error {
+func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, packageName, status string, metadata models.JSONB) error {
 	tx, err := q.db.Beginx()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -586,4 +622,128 @@ func (q *UpdateQueries) GetAllUpdateStats() (*models.UpdateStats, error) {
 	}
 
 	return stats, nil
+}
+
+// GetUpdateLogs retrieves installation logs for a specific update
+func (q *UpdateQueries) GetUpdateLogs(updateID uuid.UUID, limit int) ([]models.UpdateLog, error) {
+	var logs []models.UpdateLog
+
+	query := `
+		SELECT
+			id, agent_id, update_package_id, action, result,
+			stdout, stderr, exit_code, duration_seconds, executed_at
+		FROM update_logs
+		WHERE update_package_id = $1
+		ORDER BY executed_at DESC
+		LIMIT $2
+	`
+
+	if limit == 0 {
+		limit = 50 // Default limit
+	}
+
+	err := q.db.Select(&logs, query, updateID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get update logs: %w", err)
+	}
+
+	return logs, nil
+}
+
+// GetAllLogs retrieves logs across all agents with filtering
+func (q *UpdateQueries) GetAllLogs(filters *models.LogFilters) ([]models.UpdateLog, int, error) {
+	var logs []models.UpdateLog
+	whereClause := []string{"1=1"}
+	args := []interface{}{}
+	argIdx := 1
+
+	// Add filters
+	if filters.AgentID != uuid.Nil {
+		whereClause = append(whereClause, fmt.Sprintf("agent_id = $%d", argIdx))
+		args = append(args, filters.AgentID)
+		argIdx++
+	}
+
+	if filters.Action != "" {
+		whereClause = append(whereClause, fmt.Sprintf("action = $%d", argIdx))
+		args = append(args, filters.Action)
+		argIdx++
+	}
+
+	if filters.Result != "" {
+		whereClause = append(whereClause, fmt.Sprintf("result = $%d", argIdx))
+		args = append(args, filters.Result)
+		argIdx++
+	}
+
+	if filters.Since != nil {
+		whereClause = append(whereClause, fmt.Sprintf("executed_at >= $%d", argIdx))
+		args = append(args, filters.Since)
+		argIdx++
+	}
+
+	// Get total count
+	countQuery := "SELECT COUNT(*) FROM update_logs WHERE " + strings.Join(whereClause, " AND ")
+	var total int
+	err := q.db.Get(&total, countQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get logs count: %w", err)
+	}
+
+	// Get paginated results
+	query := fmt.Sprintf(`
+		SELECT
+			id, agent_id, update_package_id, action, result,
+			stdout, stderr, exit_code, duration_seconds, executed_at
+		FROM update_logs
+		WHERE %s
+		ORDER BY executed_at DESC
+		LIMIT $%d OFFSET $%d
+	`, strings.Join(whereClause, " AND "), argIdx, argIdx+1)
+
+	limit := filters.PageSize
+	if limit == 0 {
+		limit = 100 // Default limit
+	}
+	offset := (filters.Page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+
+	args = append(args, limit, offset)
+	err = q.db.Select(&logs, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get all logs: %w", err)
+	}
+
+	return logs, total, nil
+}
+
+// GetActiveOperations returns currently running operations
+func (q *UpdateQueries) GetActiveOperations() ([]models.ActiveOperation, error) {
+	var operations []models.ActiveOperation
+
+	query := `
+		SELECT DISTINCT ON (agent_id, package_type, package_name)
+			id,
+			agent_id,
+			package_type,
+			package_name,
+			current_version,
+			available_version,
+			severity,
+			status,
+			last_updated_at,
+			metadata
+		FROM current_package_state
+		WHERE status IN ('checking_dependencies', 'installing', 'pending_dependencies')
+		ORDER BY agent_id, package_type, package_name, last_updated_at DESC
+	`
+
+	err := q.db.Select(&operations, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active operations: %w", err)
+	}
+
+	return operations, nil
 }

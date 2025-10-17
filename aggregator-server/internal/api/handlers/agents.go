@@ -8,21 +8,26 @@ import (
 	"github.com/aggregator-project/aggregator-server/internal/api/middleware"
 	"github.com/aggregator-project/aggregator-server/internal/database/queries"
 	"github.com/aggregator-project/aggregator-server/internal/models"
+	"github.com/aggregator-project/aggregator-server/internal/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type AgentHandler struct {
-	agentQueries   *queries.AgentQueries
-	commandQueries *queries.CommandQueries
-	checkInInterval int
+	agentQueries          *queries.AgentQueries
+	commandQueries        *queries.CommandQueries
+	refreshTokenQueries   *queries.RefreshTokenQueries
+	checkInInterval       int
+	latestAgentVersion    string
 }
 
-func NewAgentHandler(aq *queries.AgentQueries, cq *queries.CommandQueries, checkInInterval int) *AgentHandler {
+func NewAgentHandler(aq *queries.AgentQueries, cq *queries.CommandQueries, rtq *queries.RefreshTokenQueries, checkInInterval int, latestAgentVersion string) *AgentHandler {
 	return &AgentHandler{
-		agentQueries:   aq,
-		commandQueries: cq,
-		checkInInterval: checkInInterval,
+		agentQueries:          aq,
+		commandQueries:        cq,
+		refreshTokenQueries:   rtq,
+		checkInInterval:       checkInInterval,
+		latestAgentVersion:    latestAgentVersion,
 	}
 }
 
@@ -60,17 +65,32 @@ func (h *AgentHandler) RegisterAgent(c *gin.Context) {
 		return
 	}
 
-	// Generate JWT token
+	// Generate JWT access token (short-lived: 24 hours)
 	token, err := middleware.GenerateAgentToken(agent.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
 	}
 
-	// Return response
+	// Generate refresh token (long-lived: 90 days)
+	refreshToken, err := queries.GenerateRefreshToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+
+	// Store refresh token in database with 90-day expiration
+	refreshTokenExpiry := time.Now().Add(90 * 24 * time.Hour)
+	if err := h.refreshTokenQueries.CreateRefreshToken(agent.ID, refreshToken, refreshTokenExpiry); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store refresh token"})
+		return
+	}
+
+	// Return response with both tokens
 	response := models.AgentRegistrationResponse{
-		AgentID: agent.ID,
-		Token:   token,
+		AgentID:      agent.ID,
+		Token:        token,
+		RefreshToken: refreshToken,
 		Config: map[string]interface{}{
 			"check_in_interval": h.checkInInterval,
 			"server_url":        c.Request.Host,
@@ -81,15 +101,123 @@ func (h *AgentHandler) RegisterAgent(c *gin.Context) {
 }
 
 // GetCommands returns pending commands for an agent
+// Agents can optionally send lightweight system metrics in request body
 func (h *AgentHandler) GetCommands(c *gin.Context) {
 	agentID := c.MustGet("agent_id").(uuid.UUID)
+
+	// Try to parse optional system metrics from request body
+	var metrics struct {
+		CPUPercent    float64 `json:"cpu_percent,omitempty"`
+		MemoryPercent float64 `json:"memory_percent,omitempty"`
+		MemoryUsedGB  float64 `json:"memory_used_gb,omitempty"`
+		MemoryTotalGB float64 `json:"memory_total_gb,omitempty"`
+		DiskUsedGB    float64 `json:"disk_used_gb,omitempty"`
+		DiskTotalGB   float64 `json:"disk_total_gb,omitempty"`
+		DiskPercent   float64 `json:"disk_percent,omitempty"`
+		Uptime        string  `json:"uptime,omitempty"`
+		Version       string  `json:"version,omitempty"`
+	}
+
+	// Parse metrics if provided (optional, won't fail if empty)
+	err := c.ShouldBindJSON(&metrics)
+	if err != nil {
+		log.Printf("DEBUG: Failed to parse metrics JSON: %v", err)
+	}
+
+	// Debug logging to see what we received
+	log.Printf("DEBUG: Received metrics - Version: '%s', CPU: %.2f, Memory: %.2f",
+		metrics.Version, metrics.CPUPercent, metrics.MemoryPercent)
+
+	// Always handle version information if provided
+	if metrics.Version != "" {
+		// Get current agent to preserve existing metadata
+		agent, err := h.agentQueries.GetAgentByID(agentID)
+		if err == nil && agent.Metadata != nil {
+			// Update agent's current version
+			if err := h.agentQueries.UpdateAgentVersion(agentID, metrics.Version); err != nil {
+				log.Printf("Warning: Failed to update agent version: %v", err)
+			} else {
+				// Check if update is available
+				updateAvailable := utils.IsNewerVersion(h.latestAgentVersion, metrics.Version)
+
+				// Update agent's update availability status
+				if err := h.agentQueries.UpdateAgentUpdateAvailable(agentID, updateAvailable); err != nil {
+					log.Printf("Warning: Failed to update agent update availability: %v", err)
+				}
+
+				// Log version check
+				if updateAvailable {
+					log.Printf("🔄 Agent %s (%s) version %s has update available: %s",
+						agent.Hostname, agentID, metrics.Version, h.latestAgentVersion)
+				} else {
+					log.Printf("✅ Agent %s (%s) version %s is up to date",
+						agent.Hostname, agentID, metrics.Version)
+				}
+
+				// Store version in metadata as well
+				agent.Metadata["reported_version"] = metrics.Version
+				agent.Metadata["latest_version"] = h.latestAgentVersion
+				agent.Metadata["update_available"] = updateAvailable
+				agent.Metadata["version_checked_at"] = time.Now().Format(time.RFC3339)
+			}
+		}
+	}
+
+	// Update agent metadata with current metrics if provided
+	if metrics.CPUPercent > 0 || metrics.MemoryPercent > 0 || metrics.DiskUsedGB > 0 || metrics.Uptime != "" {
+		// Get current agent to preserve existing metadata
+		agent, err := h.agentQueries.GetAgentByID(agentID)
+		if err == nil && agent.Metadata != nil {
+			// Update metrics in metadata
+			agent.Metadata["cpu_percent"] = metrics.CPUPercent
+			agent.Metadata["memory_percent"] = metrics.MemoryPercent
+			agent.Metadata["memory_used_gb"] = metrics.MemoryUsedGB
+			agent.Metadata["memory_total_gb"] = metrics.MemoryTotalGB
+			agent.Metadata["disk_used_gb"] = metrics.DiskUsedGB
+			agent.Metadata["disk_total_gb"] = metrics.DiskTotalGB
+			agent.Metadata["disk_percent"] = metrics.DiskPercent
+			agent.Metadata["uptime"] = metrics.Uptime
+			agent.Metadata["metrics_updated_at"] = time.Now().Format(time.RFC3339)
+
+			// Update agent with new metadata
+			if err := h.agentQueries.UpdateAgent(agent); err != nil {
+				log.Printf("Warning: Failed to update agent metrics: %v", err)
+			}
+		}
+	}
 
 	// Update last_seen
 	if err := h.agentQueries.UpdateAgentLastSeen(agentID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update last seen"})
 		return
 	}
-	log.Printf("Updated last_seen for agent %s", agentID)
+
+	// Check for version updates for agents that don't send version in metrics
+	// This ensures agents like Metis that don't report version still get update checks
+	if metrics.Version == "" {
+		// Get current agent to check version
+		agent, err := h.agentQueries.GetAgentByID(agentID)
+		if err == nil && agent.CurrentVersion != "" {
+			// Check if update is available based on stored version
+			updateAvailable := utils.IsNewerVersion(h.latestAgentVersion, agent.CurrentVersion)
+
+			// Update agent's update availability status if it changed
+			if agent.UpdateAvailable != updateAvailable {
+				if err := h.agentQueries.UpdateAgentUpdateAvailable(agentID, updateAvailable); err != nil {
+					log.Printf("Warning: Failed to update agent update availability: %v", err)
+				} else {
+					// Log version check for agent without version reporting
+					if updateAvailable {
+						log.Printf("🔄 Agent %s (%s) stored version %s has update available: %s",
+							agent.Hostname, agentID, agent.CurrentVersion, h.latestAgentVersion)
+					} else {
+						log.Printf("✅ Agent %s (%s) stored version %s is up to date",
+							agent.Hostname, agentID, agent.CurrentVersion)
+					}
+				}
+			}
+		}
+	}
 
 	// Get pending commands
 	commands, err := h.commandQueries.GetPendingCommands(agentID)
@@ -244,6 +372,58 @@ func (h *AgentHandler) TriggerUpdate(c *gin.Context) {
 		"action":     req.Action,
 		"package":    req.PackageName,
 	})
+}
+
+// RenewToken handles token renewal using refresh token
+func (h *AgentHandler) RenewToken(c *gin.Context) {
+	var req models.TokenRenewalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate refresh token
+	refreshToken, err := h.refreshTokenQueries.ValidateRefreshToken(req.AgentID, req.RefreshToken)
+	if err != nil {
+		log.Printf("Token renewal failed for agent %s: %v", req.AgentID, err)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
+		return
+	}
+
+	// Check if agent still exists
+	agent, err := h.agentQueries.GetAgentByID(req.AgentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Update agent last_seen timestamp
+	if err := h.agentQueries.UpdateAgentLastSeen(req.AgentID); err != nil {
+		log.Printf("Warning: Failed to update last_seen for agent %s: %v", req.AgentID, err)
+	}
+
+	// Update refresh token expiration (sliding window - reset to 90 days from now)
+	// This ensures active agents never need to re-register
+	newExpiry := time.Now().Add(90 * 24 * time.Hour)
+	if err := h.refreshTokenQueries.UpdateExpiration(refreshToken.ID, newExpiry); err != nil {
+		log.Printf("Warning: Failed to update refresh token expiration: %v", err)
+	}
+
+	// Generate new access token (24 hours)
+	token, err := middleware.GenerateAgentToken(req.AgentID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+
+	log.Printf("✅ Token renewed successfully for agent %s (%s)", agent.Hostname, req.AgentID)
+
+	// Return new access token
+	response := models.TokenRenewalResponse{
+		Token: token,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // UnregisterAgent removes an agent from the system

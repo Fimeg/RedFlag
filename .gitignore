@@ -11,6 +11,13 @@
 *.so
 *.dylib
 
+# All documentation goes in docs/ folder (private development)
+docs/
+*.md
+!README.md
+!LICENSE
+!.env.example
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -226,6 +233,13 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
+# Compiled binaries (project-specific)
+redflag-agent
+redflag-server
+aggregator-agent/redflag-agent
+aggregator-server/redflag-server
+aggregator-server/server
+
 # Agent configuration (may contain sensitive data)
 aggregator-agent/config.json
 aggregator-agent/.agent-id
@@ -255,6 +269,11 @@ test-results/
 *.dev
 .devenv/
 dev/
+
+# Development packages and scripts
+aggregator-agent/pkg/
+aggregator-server/scripts/
+aggregator-server/internal/utils/
 
 # Build artifacts
 *.tar.gz
@@ -369,9 +388,9 @@ secrets/
 
 # Screenshots (needed for README)
 !Screenshots/
-*.png
-*.jpg
-*.jpeg
+!Screenshots/*.png
+!Screenshots/*.jpg
+!Screenshots/*.jpeg
 
 # Core functionality (needed for working system)
 !aggregator-agent/internal/installer/
@@ -383,36 +402,6 @@ secrets/
 # Only minimal README, no other documentation
 
 # =============================================================================
-# Exclude detailed documentation and session files (keep private development)
-# =============================================================================
-# Exclude ALL documentation files - this is private development
-*.md
-!README.md
-!LICENSE
-!.env.example
-!docker-compose.yml
-!Makefile
-*.html
-*.txt
-
-# Session and development files
-SESSION_*
-claude*
-TECHNICAL_*
-COMPETITIVE_*
-PROXMOX_*
-HOW_TO_*
-NEXT_*
-Starting*
-README_D*
-README_backup*
-
-# Setup and documentation files
-SETUP_*
-CONTRIBUTING*
-.github/
-docs/
-
 # AI / LLM Development Files
+# =============================================================================
 .claude/
-*claude*

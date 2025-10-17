@@ -7,7 +7,8 @@ import Dashboard from '@/pages/Dashboard';
 import Agents from '@/pages/Agents';
 import Updates from '@/pages/Updates';
 import Docker from '@/pages/Docker';
-import Logs from '@/pages/Logs';
+import LiveOperations from '@/pages/LiveOperations';
+import History from '@/pages/History';
 import Settings from '@/pages/Settings';
 import Login from '@/pages/Login';
 
@@ -94,7 +95,8 @@ const App: React.FC = () => {
                   <Route path="/updates" element={<Updates />} />
                   <Route path="/updates/:id" element={<Updates />} />
                   <Route path="/docker" element={<Docker />} />
-                  <Route path="/logs" element={<Logs />} />
+                  <Route path="/live" element={<LiveOperations />} />
+                  <Route path="/history" element={<History />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

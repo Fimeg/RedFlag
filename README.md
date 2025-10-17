@@ -17,9 +17,10 @@ A self-hosted, cross-platform update management platform built with:
 
 - Go server backend + PostgreSQL
 - React web dashboard with TypeScript
-- Linux agents with APT + Docker scanning
+- Cross-platform agents (Linux APT/DNF/Docker, Windows Updates/Winget)
 - Local CLI tools for agent management
-- Update installation system (alpha)
+- Update installation system with dependency management
+- Refresh token authentication for stable agent identity
 
 ## What This Isn't
 
@@ -32,33 +33,48 @@ A self-hosted, cross-platform update management platform built with:
 
 ### Working Features
 - Server backend with REST API
-- Agent registration and check-in
-- Update discovery for APT packages and Docker images
-- Update approval workflow
-- Web dashboard with agent management
-- Local CLI tools (--scan, --status, --list-updates, --export)
-- Update installation system (alpha quality)
+- Cross-platform agent registration and check-in
+- Update discovery for APT, DNF, Docker images, Windows Updates, and Winget packages
+- Update approval workflow with dependency confirmation
+- Web dashboard with agent management and real-time status
+- Local CLI tools (--scan, --status, --list-updates, --export, --export=json/csv)
+- Update installation system with dry-run dependency checking
+- Beautiful terminal output with colors and severity indicators
+- Local cache system for offline viewing of scan results
+- Refresh token authentication for stable agent identity
+- Event-sourced database architecture for scalability
 
 ### Known Limitations
-- Update installation is minimally tested
-- DNF/RPM scanner incomplete
-- No rate limiting on API endpoints
-- No Windows agent support
+- No rate limiting on API endpoints (security improvement needed)
 - No real-time WebSocket updates
+- Proxmox integration is broken (needs complete rewrite)
+- Authentication system works but needs security hardening
 
 ## Screenshots
 
-### Default Dashboard
-![Default Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png)
-Main overview showing agent status, system metrics, and update statistics
+### Main Dashboard
+![Main Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png)
+Overview showing agent status, system metrics, and update statistics
 
 ### Updates Management
 ![Updates Dashboard](Screenshots/RedFlag%20Updates%20Dashboard.png)
-Comprehensive update listing with filtering, approval, and bulk operations
+Comprehensive update listing with filtering, approval, and dependency confirmation
 
 ### Agent Details
-![Agent Dashboard](Screenshots/RedFlag%20Agent%20Dashboard.png)
+![Agent Details](Screenshots/RedFlag%20Agent%20Details.png)
 Detailed agent information including system specs, last check-in, and individual update management
+
+### Windows Agent Support
+![Windows Agent](Screenshots/RedFlag%20Windows%20Agent%20Details.png)
+Cross-platform support for Windows Updates and Winget package management
+
+### History & Audit Trail
+![History Dashboard](Screenshots/RedFlag%20History%20Dashboard.png)
+Complete audit trail of all update activities and command execution
+
+### Live Operations
+![Live Operations](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png)
+Real-time view of update operations with success/failure tracking
 
 ### Docker Container Management
 ![Docker Dashboard](Screenshots/RedFlag%20Docker%20Dashboard.png)
