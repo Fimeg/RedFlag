@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Filter, Package, Clock, AlertTriangle } from 'lucide-react';
+import { Search, Package, Clock } from 'lucide-react';
 import { formatRelativeTime } from '@/lib/utils';
 import { updateApi } from '@/lib/api';
 import type { UpdatePackage } from '@/types';
@@ -24,8 +24,7 @@ export function AgentSystemUpdates({ agentId }: AgentUpdatesProps) {
       const params = {
         page: currentPage,
         page_size: pageSize,
-        agent: agentId,
-        type: 'system', // Only show system updates in AgentUpdates
+        agent_id: agentId, // Fix: use correct parameter name expected by backend
         ...(searchTerm && { search: searchTerm }),
       };
 
@@ -157,8 +156,8 @@ export function AgentSystemUpdates({ agentId }: AgentUpdatesProps) {
 
                   <div className="flex items-center gap-4 text-xs text-gray-500 mb-2">
                     <span>Type: {update.package_type}</span>
-                    {update.repository_source && (
-                      <span>Source: {update.repository_source}</span>
+                    {update.metadata?.repository_source && (
+                      <span>Source: {update.metadata.repository_source}</span>
                     )}
                     <div className="flex items-center gap-1">
                       <Clock className="h-3 w-3" />

@@ -113,12 +113,81 @@ export const updateApi = {
   installUpdate: async (id: string): Promise<void> => {
     await api.post(`/updates/${id}/install`);
   },
+
+  // Get update logs
+  getUpdateLogs: async (id: string, limit?: number): Promise<{ logs: any[]; count: number }> => {
+    const response = await api.get(`/updates/${id}/logs`, {
+      params: limit ? { limit } : undefined
+    });
+    return response.data;
+  },
+
+  // Retry a failed, timed_out, or cancelled command
+  retryCommand: async (commandId: string): Promise<{ message: string; command_id: string; new_id: string }> => {
+    const response = await api.post(`/commands/${commandId}/retry`);
+    return response.data;
+  },
+
+  // Cancel a pending or sent command
+  cancelCommand: async (commandId: string): Promise<{ message: string }> => {
+    const response = await api.post(`/commands/${commandId}/cancel`);
+    return response.data;
+  },
+
+  // Get active commands for live command control
+  getActiveCommands: async (): Promise<{ commands: any[]; count: number }> => {
+    const response = await api.get('/commands/active');
+    return response.data;
+  },
+
+  // Get recent commands for retry functionality
+  getRecentCommands: async (limit?: number): Promise<{ commands: any[]; count: number; limit: number }> => {
+    const response = await api.get('/commands/recent', {
+      params: limit ? { limit } : undefined
+    });
+    return response.data;
+  },
 };
 
 export const statsApi = {
   // Get dashboard statistics
   getDashboardStats: async (): Promise<DashboardStats> => {
     const response = await api.get('/stats/summary');
+    return response.data;
+  },
+};
+
+export const logApi = {
+  // Get all logs with filtering for universal log view
+  getAllLogs: async (params?: {
+    page?: number;
+    page_size?: number;
+    agent_id?: string;
+    action?: string;
+    result?: string;
+    since?: string;
+  }): Promise<{ logs: any[]; total: number; page: number; page_size: number }> => {
+    const response = await api.get('/logs', { params });
+    return response.data;
+  },
+
+  // Get active operations for live status view
+  getActiveOperations: async (): Promise<{ operations: any[]; count: number }> => {
+    const response = await api.get('/logs/active');
+    return response.data;
+  },
+
+  // Get active commands for live command control
+  getActiveCommands: async (): Promise<{ commands: any[]; count: number }> => {
+    const response = await api.get('/commands/active');
+    return response.data;
+  },
+
+  // Get recent commands for retry functionality
+  getRecentCommands: async (limit?: number): Promise<{ commands: any[]; count: number; limit: number }> => {
+    const response = await api.get('/commands/recent', {
+      params: limit ? { limit } : undefined
+    });
     return response.data;
   },
 };

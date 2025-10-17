@@ -13,12 +13,17 @@ import {
   AlertTriangle,
   Clock,
   Calendar,
+  X,
+  Loader2,
+  RotateCcw,
 } from 'lucide-react';
-import { useUpdates, useUpdate, useApproveUpdate, useRejectUpdate, useInstallUpdate, useApproveMultipleUpdates } from '@/hooks/useUpdates';
+import { useUpdates, useUpdate, useApproveUpdate, useRejectUpdate, useInstallUpdate, useApproveMultipleUpdates, useRetryCommand, useCancelCommand } from '@/hooks/useUpdates';
+import { useRecentCommands } from '@/hooks/useCommands';
 import type { UpdatePackage } from '@/types';
 import { getSeverityColor, getStatusColor, getPackageTypeIcon, formatBytes, formatRelativeTime } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
+import { updateApi } from '@/lib/api';
 
 
 const Updates: React.FC = () => {
@@ -28,19 +33,39 @@ const Updates: React.FC = () => {
 
   // Get filters from URL params
   const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(searchParams.get('search') || '');
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [severityFilter, setSeverityFilter] = useState(searchParams.get('severity') || '');
   const [typeFilter, setTypeFilter] = useState(searchParams.get('type') || '');
   const [agentFilter, setAgentFilter] = useState(searchParams.get('agent') || '');
+
+  // Debounce search query to avoid API calls on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300); // 300ms delay
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedUpdates, setSelectedUpdates] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
   const [pageSize, setPageSize] = useState(100);
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [showDependencyModal, setShowDependencyModal] = useState(false);
+  const [pendingDependencies, setPendingDependencies] = useState<string[]>([]);
+  const [dependencyUpdateId, setDependencyUpdateId] = useState<string | null>(null);
+  const [dependencyLoading, setDependencyLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'updates' | 'commands'>('updates');
 
   // Store filters in URL
   useEffect(() => {
     const params = new URLSearchParams();
-    if (searchQuery) params.set('search', searchQuery);
+    if (debouncedSearchQuery) params.set('search', debouncedSearchQuery);
     if (statusFilter) params.set('status', statusFilter);
     if (severityFilter) params.set('severity', severityFilter);
     if (typeFilter) params.set('type', typeFilter);
@@ -52,11 +77,11 @@ const Updates: React.FC = () => {
     if (newUrl !== window.location.href) {
       window.history.replaceState({}, '', newUrl);
     }
-  }, [searchQuery, statusFilter, severityFilter, typeFilter, agentFilter, currentPage, pageSize]);
+  }, [debouncedSearchQuery, statusFilter, severityFilter, typeFilter, agentFilter, currentPage, pageSize]);
 
   // Fetch updates list
   const { data: updatesData, isPending, error } = useUpdates({
-    search: searchQuery || undefined,
+    search: debouncedSearchQuery || undefined,
     status: statusFilter || undefined,
     severity: severityFilter || undefined,
     type: typeFilter || undefined,
@@ -68,10 +93,15 @@ const Updates: React.FC = () => {
   // Fetch single update if ID is provided
   const { data: selectedUpdateData } = useUpdate(id || '', !!id);
 
+  // Fetch recent commands for retry functionality
+  const { data: recentCommandsData } = useRecentCommands(50);
+
   const approveMutation = useApproveUpdate();
   const rejectMutation = useRejectUpdate();
   const installMutation = useInstallUpdate();
   const bulkApproveMutation = useApproveMultipleUpdates();
+  const retryMutation = useRetryCommand();
+  const cancelMutation = useCancelCommand();
 
   const updates = updatesData?.updates || [];
   const totalCount = updatesData?.total || 0;
@@ -135,6 +165,79 @@ const Updates: React.FC = () => {
       setSelectedUpdates([]);
     } catch (error) {
       // Error handling is done in the hook
+    }
+  };
+
+  // Handle retry command
+  const handleRetryCommand = async (commandId: string) => {
+    try {
+      await retryMutation.mutateAsync(commandId);
+      toast.success('Command retry initiated successfully');
+    } catch (error: any) {
+      toast.error(`Failed to retry command: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Handle cancel command
+  const handleCancelCommand = async (commandId: string) => {
+    try {
+      await cancelMutation.mutateAsync(commandId);
+      toast.success('Command cancelled successfully');
+    } catch (error: any) {
+      toast.error(`Failed to cancel command: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Handle dependency confirmation
+  const handleConfirmDependencies = async (updateId: string) => {
+    setDependencyLoading(true);
+    try {
+      const response = await fetch(`/api/v1/updates/${updateId}/confirm-dependencies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to confirm dependencies');
+      }
+
+      toast.success('Dependency installation confirmed');
+      setShowDependencyModal(false);
+      setPendingDependencies([]);
+      setDependencyUpdateId(null);
+
+      // Refresh the update data
+      window.location.reload();
+    } catch (error) {
+      toast.error('Failed to confirm dependencies');
+      console.error('Failed to confirm dependencies:', error);
+    } finally {
+      setDependencyLoading(false);
+    }
+  };
+
+  // Handle dependency cancellation
+  const handleCancelDependencies = async () => {
+    setShowDependencyModal(false);
+    setPendingDependencies([]);
+    setDependencyUpdateId(null);
+    toast('Dependency installation cancelled');
+  };
+
+  // Handle viewing logs
+  const handleViewLogs = async (updateId: string) => {
+    setLogsLoading(true);
+    try {
+      const result = await updateApi.getUpdateLogs(updateId, 50);
+      setLogs(result.logs || []);
+      setShowLogModal(true);
+    } catch (error) {
+      toast.error('Failed to load installation logs');
+      console.error('Failed to load logs:', error);
+    } finally {
+      setLogsLoading(false);
     }
   };
 
@@ -230,7 +333,14 @@ const Updates: React.FC = () => {
                   {selectedUpdate.severity}
                 </span>
                 <span className={cn('badge', getStatusColor(selectedUpdate.status))}>
-                  {selectedUpdate.status}
+                  {selectedUpdate.status === 'checking_dependencies' ? (
+                    <div className="flex items-center space-x-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span>Checking dependencies...</span>
+                    </div>
+                  ) : (
+                    selectedUpdate.status
+                  )}
                 </span>
               </div>
               <p className="text-sm text-gray-600">
@@ -351,6 +461,54 @@ const Updates: React.FC = () => {
                   </button>
                 )}
 
+                {selectedUpdate.status === 'checking_dependencies' && (
+                  <div className="w-full btn btn-secondary opacity-75 cursor-not-allowed">
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Checking Dependencies...
+                  </div>
+                )}
+
+                {selectedUpdate.status === 'pending_dependencies' && (
+                  <button
+                    onClick={() => {
+                      // Extract dependencies from metadata
+                      const deps = selectedUpdate.metadata?.dependencies || [];
+                      setPendingDependencies(Array.isArray(deps) ? deps : []);
+                      setDependencyUpdateId(selectedUpdate.id);
+                      setShowDependencyModal(true);
+                    }}
+                    className="w-full btn btn-warning"
+                  >
+                    <AlertTriangle className="h-4 w-4 mr-2" />
+                    Review Dependencies
+                  </button>
+                )}
+
+                {['installing', 'completed', 'failed'].includes(selectedUpdate.status) && (
+                  <button
+                    onClick={() => handleViewLogs(selectedUpdate.id)}
+                    disabled={logsLoading}
+                    className="w-full btn btn-ghost"
+                  >
+                    <Package className="h-4 w-4 mr-2" />
+                    {logsLoading ? 'Loading...' : 'View Log'}
+                  </button>
+                )}
+
+                {selectedUpdate.status === 'failed' && (
+                  <button
+                    onClick={() => {
+                      // This would need a way to find the associated command ID
+                      // For now, we'll show a message indicating this needs to be implemented
+                      toast.info('Retry functionality will be available in the command history view');
+                    }}
+                    className="w-full btn btn-warning"
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Retry Update
+                  </button>
+                )}
+
                 <button
                   onClick={() => navigate(`/agents/${selectedUpdate.agent_id}`)}
                   className="w-full btn btn-ghost"
@@ -362,6 +520,213 @@ const Updates: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Dependency Confirmation Modal */}
+        {showDependencyModal && (
+          <div className="fixed inset-0 z-50 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:p-0">
+              <div className="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl border border-gray-200">
+                {/* Header */}
+                <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Dependencies Required
+                  </h3>
+                  <button
+                    type="button"
+                    className="text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-md p-1"
+                    onClick={handleCancelDependencies}
+                  >
+                    <span className="sr-only">Close</span>
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                {/* Content */}
+                <div className="bg-white px-6 py-4">
+                  <div className="space-y-4">
+                    <div className="flex items-start space-x-3">
+                      <div className="flex-shrink-0">
+                        <AlertTriangle className="h-6 w-6 text-amber-500" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-base font-medium text-gray-900">
+                          Additional packages are required
+                        </h4>
+                        <p className="mt-1 text-sm text-gray-600">
+                          To install <span className="font-medium text-gray-900">{selectedUpdate?.package_name}</span>, the following additional packages will also be installed:
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Dependencies List */}
+                    {pendingDependencies.length > 0 && (
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <h5 className="text-sm font-medium text-gray-700 mb-3">Required Dependencies:</h5>
+                        <ul className="space-y-2">
+                          {pendingDependencies.map((dep, index) => (
+                            <li key={index} className="flex items-center space-x-2 text-sm">
+                              <Package className="h-4 w-4 text-gray-400" />
+                              <span className="font-medium text-gray-700">{dep}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Warning Message */}
+                    <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
+                      <div className="flex">
+                        <AlertTriangle className="h-4 w-4 text-amber-500 mr-2 flex-shrink-0" />
+                        <div className="text-sm text-amber-800">
+                          <p className="font-medium">Please review the dependencies before proceeding.</p>
+                          <p className="mt-1">These additional packages will be installed alongside your requested package.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="bg-gray-50 px-6 py-4 sm:flex sm:flex-row-reverse rounded-b-lg border-t border-gray-200">
+                  <button
+                    type="button"
+                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:ml-3 sm:w-auto sm:text-sm"
+                    onClick={() => handleConfirmDependencies(dependencyUpdateId!)}
+                    disabled={dependencyLoading}
+                  >
+                    {dependencyLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Approving & Installing...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Approve & Install All
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    onClick={handleCancelDependencies}
+                    disabled={dependencyLoading}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Log Modal */}
+        {showLogModal && (
+          <div className="fixed inset-0 z-50 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:p-0">
+              <div className="relative transform overflow-hidden rounded-lg bg-white text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl border border-gray-200">
+                {/* Modern Header */}
+                <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-lg">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Installation Logs - {selectedUpdate?.package_name}
+                  </h3>
+                  <button
+                    type="button"
+                    className="text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-md p-1"
+                    onClick={() => setShowLogModal(false)}
+                  >
+                    <span className="sr-only">Close</span>
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                {/* Terminal Content Area */}
+                <div className="bg-gray-900 text-green-400 p-4 max-h-96 overflow-y-auto" style={{ fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace' }}>
+                  {logsLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-5 w-5 animate-spin text-green-400 mr-2" />
+                      <span className="text-green-400">Loading logs...</span>
+                    </div>
+                  ) : logs.length === 0 ? (
+                    <div className="text-gray-500 text-center py-8">
+                      No installation logs available for this update.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {logs.map((log, index) => (
+                        <div key={index} className="border-b border-gray-700 pb-3 last:border-b-0">
+                          <div className="flex items-center space-x-3 mb-2 text-xs">
+                            <span className="text-gray-500">
+                              {new Date(log.executedAt).toLocaleString()}
+                            </span>
+                            <span className={cn(
+                              "px-2 py-1 rounded font-medium",
+                              log.action === 'install' ? "bg-blue-900/50 text-blue-300" :
+                              log.action === 'configure' ? "bg-yellow-900/50 text-yellow-300" :
+                              log.action === 'cleanup' ? "bg-gray-700 text-gray-300" :
+                              "bg-gray-700 text-gray-300"
+                            )}>
+                              {log.action?.toUpperCase() || 'UNKNOWN'}
+                            </span>
+                            {log.exit_code !== undefined && (
+                              <span className={cn(
+                                "px-2 py-1 rounded font-medium",
+                                log.exit_code === 0 ? "bg-green-900/50 text-green-300" : "bg-red-900/50 text-red-300"
+                              )}>
+                                Exit: {log.exit_code}
+                              </span>
+                            )}
+                            {log.duration_seconds && (
+                              <span className="text-gray-500">
+                                {log.duration_seconds}s
+                              </span>
+                            )}
+                          </div>
+
+                          {log.stdout && (
+                            <div className="text-sm text-gray-300 whitespace-pre-wrap mb-2 font-mono">
+                              {log.stdout}
+                            </div>
+                          )}
+
+                          {log.stderr && (
+                            <div className="text-sm text-red-400 whitespace-pre-wrap font-mono">
+                              {log.stderr}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Modern Footer */}
+                <div className="bg-gray-50 px-6 py-4 sm:flex sm:flex-row-reverse rounded-b-lg border-t border-gray-200">
+                  <button
+                    type="button"
+                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:ml-3 sm:w-auto sm:text-sm"
+                    onClick={() => setShowLogModal(false)}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    onClick={() => {
+                      // Copy logs to clipboard functionality could be added here
+                      navigator.clipboard.writeText(logs.map(log =>
+                        `${log.action?.toUpperCase() || 'UNKNOWN'} - ${new Date(log.executedAt).toLocaleString()}\n${log.stdout || ''}\n${log.stderr || ''}`
+                      ).join('\n\n'));
+                      // Could add toast notification here
+                    }}
+                  >
+                    Copy Logs
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -375,6 +740,124 @@ const Updates: React.FC = () => {
     setPageSize(newPageSize);
     setCurrentPage(1); // Reset to first page when changing page size
   };
+
+  // Commands view
+  if (activeTab === 'commands') {
+    const commands = recentCommandsData?.commands || [];
+
+    return (
+      <div className="px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Command History</h1>
+              <p className="mt-1 text-sm text-gray-600">
+                Review and retry failed or cancelled commands
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveTab('updates')}
+              className="btn btn-ghost"
+            >
+              ← Back to Updates
+            </button>
+          </div>
+        </div>
+
+        {/* Commands list */}
+        {commands.length === 0 ? (
+          <div className="text-center py-12">
+            <Package className="mx-auto h-12 w-12 text-gray-400" />
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No commands found</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              No command history available yet.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="table-header">Command</th>
+                    <th className="table-header">Package</th>
+                    <th className="table-header">Agent</th>
+                    <th className="table-header">Status</th>
+                    <th className="table-header">Created</th>
+                    <th className="table-header">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {commands.map((command: any) => (
+                    <tr key={command.id} className="hover:bg-gray-50">
+                      <td className="table-cell">
+                        <div className="text-sm font-medium text-gray-900">
+                          {command.command_type.replace('_', ' ')}
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <div className="text-sm text-gray-900">
+                          {command.package_name}
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <div className="text-sm text-gray-900">
+                          {command.agent_hostname}
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <span className={cn(
+                          'badge',
+                          command.status === 'completed' ? 'bg-green-100 text-green-800' :
+                          command.status === 'failed' ? 'bg-red-100 text-red-800' :
+                          command.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
+                          command.status === 'pending' || command.status === 'sent' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        )}>
+                          {command.status}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <div className="text-sm text-gray-900">
+                          {formatRelativeTime(command.created_at)}
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <div className="flex items-center space-x-2">
+                          {(command.status === 'failed' || command.status === 'cancelled' || command.status === 'timed_out') && (
+                            <button
+                              onClick={() => handleRetryCommand(command.id)}
+                              disabled={retryMutation.isLoading}
+                              className="text-amber-600 hover:text-amber-800"
+                              title="Retry command"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </button>
+                          )}
+
+                          {(command.status === 'pending' || command.status === 'sent') && (
+                            <button
+                              onClick={() => handleCancelCommand(command.id)}
+                              disabled={cancelMutation.isLoading}
+                              className="text-red-600 hover:text-red-800"
+                              title="Cancel command"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // Updates list view
   return (
@@ -554,6 +1037,15 @@ const Updates: React.FC = () => {
               Approve Selected ({selectedUpdates.length})
             </button>
           )}
+
+          {/* Command History button */}
+          <button
+            onClick={() => setActiveTab('commands')}
+            className="btn btn-ghost"
+          >
+            <RotateCcw className="h-4 w-4 mr-2" />
+            Command History
+          </button>
         </div>
 
         {/* Filters */}
@@ -650,7 +1142,7 @@ const Updates: React.FC = () => {
           <Package className="mx-auto h-12 w-12 text-gray-400" />
           <h3 className="mt-2 text-sm font-medium text-gray-900">No updates found</h3>
           <p className="mt-1 text-sm text-gray-500">
-            {searchQuery || statusFilter || severityFilter || typeFilter || agentFilter
+            {debouncedSearchQuery || statusFilter || severityFilter || typeFilter || agentFilter
               ? 'Try adjusting your search or filters.'
               : 'All agents are up to date!'}
           </p>
@@ -728,7 +1220,14 @@ const Updates: React.FC = () => {
                     </td>
                     <td className="table-cell">
                       <span className={cn('badge', getStatusColor(update.status))}>
-                        {update.status}
+                        {update.status === 'checking_dependencies' ? (
+                          <div className="flex items-center space-x-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>Checking dependencies...</span>
+                          </div>
+                        ) : (
+                          update.status
+                        )}
                       </span>
                     </td>
                     <td className="table-cell">
@@ -777,6 +1276,12 @@ const Updates: React.FC = () => {
                           >
                             <Package className="h-4 w-4" />
                           </button>
+                        )}
+
+                        {update.status === 'checking_dependencies' && (
+                          <div className="text-blue-500" title="Checking dependencies">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          </div>
                         )}
 
                         <button
@@ -835,16 +1340,7 @@ const Updates: React.FC = () => {
 
                       {/* Page numbers */}
                       {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum;
-                        if (totalPages <= 5) {
-                          pageNum = i + 1;
-                        } else if (currentPage <= 3) {
-                          pageNum = i + 1;
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i;
-                        } else {
-                          pageNum = currentPage - 2 + i;
-                        }
+                          const pageNum = totalPages <= 5 ? i + 1 : currentPage <= 3 ? i + 1 : currentPage >= totalPages - 2 ? totalPages - 4 + i : currentPage - 2 + i;
 
                         return (
                           <button

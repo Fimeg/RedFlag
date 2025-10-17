@@ -49,6 +49,24 @@ func (q *AgentQueries) UpdateAgentLastSeen(id uuid.UUID) error {
 	return err
 }
 
+// UpdateAgent updates an agent's full record including metadata
+func (q *AgentQueries) UpdateAgent(agent *models.Agent) error {
+	query := `
+		UPDATE agents SET
+			hostname = :hostname,
+			os_type = :os_type,
+			os_version = :os_version,
+			os_architecture = :os_architecture,
+			agent_version = :agent_version,
+			last_seen = :last_seen,
+			status = :status,
+			metadata = :metadata
+		WHERE id = :id
+	`
+	_, err := q.db.NamedExec(query, agent)
+	return err
+}
+
 // ListAgents returns all agents with optional filtering
 func (q *AgentQueries) ListAgents(status, osType string) ([]models.Agent, error) {
 	var agents []models.Agent
@@ -135,6 +153,29 @@ func (q *AgentQueries) ListAgentsWithLastScan(status, osType string) ([]models.A
 	query += ` ORDER BY a.last_seen DESC`
 	err := q.db.Select(&agents, query, args...)
 	return agents, err
+}
+
+// UpdateAgentVersion updates the agent's version information and checks for updates
+func (q *AgentQueries) UpdateAgentVersion(id uuid.UUID, currentVersion string) error {
+	query := `
+		UPDATE agents SET
+			current_version = $1,
+			last_version_check = $2
+		WHERE id = $3
+	`
+	_, err := q.db.Exec(query, currentVersion, time.Now().UTC(), id)
+	return err
+}
+
+// UpdateAgentUpdateAvailable sets whether an update is available for an agent
+func (q *AgentQueries) UpdateAgentUpdateAvailable(id uuid.UUID, updateAvailable bool) error {
+	query := `
+		UPDATE agents SET
+			update_available = $1
+		WHERE id = $2
+	`
+	_, err := q.db.Exec(query, updateAvailable, id)
+	return err
 }
 
 // DeleteAgent removes an agent and all associated data

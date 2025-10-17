@@ -15,7 +15,10 @@ type Agent struct {
 	OSType         string    `json:"os_type" db:"os_type"`
 	OSVersion      string    `json:"os_version" db:"os_version"`
 	OSArchitecture string    `json:"os_architecture" db:"os_architecture"`
-	AgentVersion   string    `json:"agent_version" db:"agent_version"`
+	AgentVersion   string    `json:"agent_version" db:"agent_version"`           // Version at registration
+	CurrentVersion string    `json:"current_version" db:"current_version"`       // Current running version
+	UpdateAvailable bool     `json:"update_available" db:"update_available"`     // Whether update is available
+	LastVersionCheck time.Time `json:"last_version_check" db:"last_version_check"` // Last time version was checked
 	LastSeen       time.Time `json:"last_seen" db:"last_seen"`
 	Status         string    `json:"status" db:"status"`
 	Metadata       JSONB     `json:"metadata" db:"metadata"`
@@ -30,7 +33,10 @@ type AgentWithLastScan struct {
 	OSType         string     `json:"os_type" db:"os_type"`
 	OSVersion      string     `json:"os_version" db:"os_version"`
 	OSArchitecture string     `json:"os_architecture" db:"os_architecture"`
-	AgentVersion   string     `json:"agent_version" db:"agent_version"`
+	AgentVersion   string     `json:"agent_version" db:"agent_version"`           // Version at registration
+	CurrentVersion string     `json:"current_version" db:"current_version"`       // Current running version
+	UpdateAvailable bool      `json:"update_available" db:"update_available"`     // Whether update is available
+	LastVersionCheck time.Time `json:"last_version_check" db:"last_version_check"` // Last time version was checked
 	LastSeen       time.Time  `json:"last_seen" db:"last_seen"`
 	Status         string     `json:"status" db:"status"`
 	Metadata       JSONB      `json:"metadata" db:"metadata"`
@@ -67,9 +73,21 @@ type AgentRegistrationRequest struct {
 
 // AgentRegistrationResponse is returned after successful registration
 type AgentRegistrationResponse struct {
-	AgentID uuid.UUID              `json:"agent_id"`
-	Token   string                 `json:"token"`
-	Config  map[string]interface{} `json:"config"`
+	AgentID      uuid.UUID              `json:"agent_id"`
+	Token        string                 `json:"token"`          // Short-lived access token (24h)
+	RefreshToken string                 `json:"refresh_token"`  // Long-lived refresh token (90d)
+	Config       map[string]interface{} `json:"config"`
+}
+
+// TokenRenewalRequest is the payload for token renewal using refresh token
+type TokenRenewalRequest struct {
+	AgentID      uuid.UUID `json:"agent_id" binding:"required"`
+	RefreshToken string    `json:"refresh_token" binding:"required"`
+}
+
+// TokenRenewalResponse is returned after successful token renewal
+type TokenRenewalResponse struct {
+	Token string `json:"token"`  // New short-lived access token (24h)
 }
 
 // UTCTime is a time.Time that marshals to ISO format with UTC timezone

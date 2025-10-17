@@ -77,6 +77,30 @@ type UpdateLogRequest struct {
 	DurationSeconds int       `json:"duration_seconds"`
 }
 
+// DependencyReportRequest is used by agents to report dependencies after dry run
+type DependencyReportRequest struct {
+	PackageName   string        `json:"package_name" binding:"required"`
+	PackageType   string        `json:"package_type" binding:"required"`
+	Dependencies  []string      `json:"dependencies" binding:"required"`
+	UpdateID      string        `json:"update_id" binding:"required"`
+	DryRunResult  *InstallResult `json:"dry_run_result,omitempty"`
+}
+
+// InstallResult represents the result of a package installation attempt (from agent)
+type InstallResult struct {
+	Success           bool          `json:"success"`
+	ErrorMessage      string        `json:"error_message,omitempty"`
+	Stdout           string        `json:"stdout,omitempty"`
+	Stderr           string        `json:"stderr,omitempty"`
+	ExitCode         int           `json:"exit_code"`
+	DurationSeconds  int           `json:"duration_seconds"`
+	Action           string        `json:"action,omitempty"`         // "install", "upgrade", "dry_run", etc.
+	PackagesInstalled []string     `json:"packages_installed,omitempty"`
+	ContainersUpdated []string     `json:"containers_updated,omitempty"`
+	Dependencies      []string      `json:"dependencies,omitempty"`      // List of dependency packages found during dry run
+	IsDryRun         bool          `json:"is_dry_run"`                  // Whether this is a dry run result
+}
+
 // UpdateFilters for querying updates
 type UpdateFilters struct {
 	AgentID     uuid.UUID
@@ -162,4 +186,28 @@ type UpdateStats struct {
 	ImportantUpdates int `json:"important_updates" db:"important_updates"`
 	ModerateUpdates  int `json:"moderate_updates" db:"moderate_updates"`
 	LowUpdates       int `json:"low_updates" db:"low_updates"`
+}
+
+// LogFilters for querying logs across all agents
+type LogFilters struct {
+	AgentID   uuid.UUID
+	Action    string
+	Result    string
+	Since     *time.Time
+	Page      int
+	PageSize  int
+}
+
+// ActiveOperation represents a currently running operation
+type ActiveOperation struct {
+	ID                uuid.UUID `json:"id" db:"id"`
+	AgentID           uuid.UUID `json:"agent_id" db:"agent_id"`
+	PackageType       string    `json:"package_type" db:"package_type"`
+	PackageName       string    `json:"package_name" db:"package_name"`
+	CurrentVersion    string    `json:"current_version" db:"current_version"`
+	AvailableVersion  string    `json:"available_version" db:"available_version"`
+	Severity          string    `json:"severity" db:"severity"`
+	Status            string    `json:"status" db:"status"`
+	LastUpdatedAt     time.Time `json:"last_updated_at" db:"last_updated_at"`
+	Metadata          JSONB     `json:"metadata" db:"metadata"`
 }

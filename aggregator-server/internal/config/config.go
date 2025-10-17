@@ -16,6 +16,7 @@ type Config struct {
 	CheckInInterval  int
 	OfflineThreshold int
 	Timezone         string
+	LatestAgentVersion string
 }
 
 // Load reads configuration from environment variables
@@ -27,12 +28,13 @@ func Load() (*Config, error) {
 	offlineThreshold, _ := strconv.Atoi(getEnv("OFFLINE_THRESHOLD", "600"))
 
 	cfg := &Config{
-		ServerPort:       getEnv("SERVER_PORT", "8080"),
-		DatabaseURL:      getEnv("DATABASE_URL", "postgres://aggregator:aggregator@localhost:5432/aggregator?sslmode=disable"),
-		JWTSecret:        getEnv("JWT_SECRET", "test-secret-for-development-only"),
-		CheckInInterval:  checkInInterval,
-		OfflineThreshold: offlineThreshold,
-		Timezone:         getEnv("TIMEZONE", "UTC"),
+		ServerPort:         getEnv("SERVER_PORT", "8080"),
+		DatabaseURL:        getEnv("DATABASE_URL", "postgres://aggregator:aggregator@localhost:5432/aggregator?sslmode=disable"),
+		JWTSecret:          getEnv("JWT_SECRET", "test-secret-for-development-only"),
+		CheckInInterval:    checkInInterval,
+		OfflineThreshold:   offlineThreshold,
+		Timezone:           getEnv("TIMEZONE", "UTC"),
+		LatestAgentVersion: getEnv("LATEST_AGENT_VERSION", "0.1.4"),
 	}
 
 	// Debug: Log what JWT secret we're using (remove in production)

@@ -13,7 +13,8 @@ import (
 type Config struct {
 	ServerURL       string    `json:"server_url"`
 	AgentID         uuid.UUID `json:"agent_id"`
-	Token           string    `json:"token"`
+	Token           string    `json:"token"`            // Short-lived access token (24h)
+	RefreshToken    string    `json:"refresh_token"`    // Long-lived refresh token (90d)
 	CheckInInterval int       `json:"check_in_interval"`
 }
 

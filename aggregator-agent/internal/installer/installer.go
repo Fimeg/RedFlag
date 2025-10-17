@@ -1,5 +1,7 @@
 package installer
 
+import "fmt"
+
 // Installer interface for different package types
 type Installer interface {
 	IsAvailable() bool
@@ -7,6 +9,7 @@ type Installer interface {
 	InstallMultiple(packageNames []string) (*InstallResult, error)
 	Upgrade() (*InstallResult, error)
 	GetPackageType() string
+	DryRun(packageName string) (*InstallResult, error)  // New: Perform dry run to check dependencies
 }
 
 // InstallerFactory creates appropriate installer based on package type
@@ -18,6 +21,10 @@ func InstallerFactory(packageType string) (Installer, error) {
 		return NewDNFInstaller(), nil
 	case "docker_image":
 		return NewDockerInstaller()
+	case "windows_update":
+		return NewWindowsUpdateInstaller(), nil
+	case "winget":
+		return NewWingetInstaller(), nil
 	default:
 		return nil, fmt.Errorf("unsupported package type: %s", packageType)
 	}

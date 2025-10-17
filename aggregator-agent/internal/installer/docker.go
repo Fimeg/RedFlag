@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/aggregator-project/aggregator-agent/internal/client"
 )
 
 // DockerInstaller handles Docker image updates
@@ -129,20 +127,63 @@ func (i *DockerInstaller) Upgrade() (*InstallResult, error) {
 	}, fmt.Errorf("docker upgrade not implemented")
 }
 
+// DryRun for Docker images checks if the image can be pulled without actually pulling it
+func (i *DockerInstaller) DryRun(imageName string) (*InstallResult, error) {
+	startTime := time.Now()
+
+	// Check if image exists locally
+	inspectCmd := exec.Command("sudo", "docker", "image", "inspect", imageName)
+	output, err := inspectCmd.CombinedOutput()
+
+	if err == nil {
+		// Image exists locally
+		duration := int(time.Since(startTime).Seconds())
+		return &InstallResult{
+			Success:        true,
+			Stdout:         fmt.Sprintf("Docker image %s is already available locally", imageName),
+			Stderr:         string(output),
+			ExitCode:       0,
+			DurationSeconds: duration,
+			Dependencies:    []string{}, // Docker doesn't have traditional dependencies
+			IsDryRun:        true,
+			Action:          "dry_run",
+		}, nil
+	}
+
+	// Image doesn't exist locally, check if it exists in registry
+	// Use docker manifest command to check remote availability
+	manifestCmd := exec.Command("sudo", "docker", "manifest", "inspect", imageName)
+	manifestOutput, manifestErr := manifestCmd.CombinedOutput()
+	duration := int(time.Since(startTime).Seconds())
+
+	if manifestErr != nil {
+		return &InstallResult{
+			Success:        false,
+			ErrorMessage:   fmt.Sprintf("Docker image %s not found locally or in remote registry", imageName),
+			Stdout:         string(output),
+			Stderr:         string(manifestOutput),
+			ExitCode:       getExitCode(manifestErr),
+			DurationSeconds: duration,
+			Dependencies:    []string{},
+			IsDryRun:        true,
+			Action:          "dry_run",
+		}, fmt.Errorf("docker image not found")
+	}
+
+	return &InstallResult{
+		Success:        true,
+		Stdout:         fmt.Sprintf("Docker image %s is available for download", imageName),
+		Stderr:         string(manifestOutput),
+		ExitCode:       0,
+		DurationSeconds: duration,
+		Dependencies:    []string{}, // Docker doesn't have traditional dependencies
+		IsDryRun:        true,
+		Action:          "dry_run",
+	}, nil
+}
+
 // GetPackageType returns type of packages this installer handles
 func (i *DockerInstaller) GetPackageType() string {
 	return "docker_image"
 }
 
-// getExitCode extracts exit code from exec error
-func getExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-
-	if exitError, ok := err.(*exec.ExitError); ok {
-		return exitError.ExitCode()
-	}
-
-	return 1 // Default error code
-}

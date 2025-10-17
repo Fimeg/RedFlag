@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Computer,
@@ -15,21 +15,41 @@ import {
   GitBranch,
   Clock,
   Trash2,
+  History as HistoryIcon,
+  Download,
+  CheckCircle,
+  AlertCircle,
+  XCircle,
 } from 'lucide-react';
 import { useAgents, useAgent, useScanAgent, useScanMultipleAgents, useUnregisterAgent } from '@/hooks/useAgents';
+import { useActiveCommands, useCancelCommand } from '@/hooks/useCommands';
 import { getStatusColor, formatRelativeTime, isOnline, formatBytes } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import { AgentSystemUpdates } from '@/components/AgentUpdates';
+import HistoryTimeline from '@/components/HistoryTimeline';
 
 const Agents: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [osFilter, setOsFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
+
+  // Debounce search query to avoid API calls on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300); // 300ms delay
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   // Helper function to get system metadata from agent
   const getSystemMetadata = (agent: any) => {
@@ -106,7 +126,7 @@ const Agents: React.FC = () => {
 
   // Fetch agents list
   const { data: agentsData, isPending, error } = useAgents({
-    search: searchQuery || undefined,
+    search: debouncedSearchQuery || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
   });
 
@@ -116,6 +136,10 @@ const Agents: React.FC = () => {
   const scanAgentMutation = useScanAgent();
   const scanMultipleMutation = useScanMultipleAgents();
   const unregisterAgentMutation = useUnregisterAgent();
+
+  // Active commands for live status
+  const { data: activeCommandsData, refetch: refetchActiveCommands } = useActiveCommands();
+  const cancelCommandMutation = useCancelCommand();
 
   const agents = agentsData?.agents || [];
   const selectedAgent = selectedAgentData || agents.find(a => a.id === id);
@@ -189,6 +213,58 @@ const Agents: React.FC = () => {
     }
   };
 
+  // Handle command cancellation
+  const handleCancelCommand = async (commandId: string) => {
+    try {
+      await cancelCommandMutation.mutateAsync(commandId);
+      toast.success('Command cancelled successfully');
+      refetchActiveCommands();
+    } catch (error: any) {
+      toast.error(`Failed to cancel command: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Get agent-specific active commands
+  const getAgentActiveCommands = () => {
+    if (!selectedAgent || !activeCommandsData?.commands) return [];
+    return activeCommandsData.commands.filter(cmd => cmd.agent_id === selectedAgent.id);
+  };
+
+  // Helper function to get command display info
+  const getCommandDisplayInfo = (command: any) => {
+    const actionMap: { [key: string]: { icon: React.ReactNode; label: string } } = {
+      'scan': { icon: <RefreshCw className="h-4 w-4" />, label: 'System scan' },
+      'install_updates': { icon: <Package className="h-4 w-4" />, label: `Installing ${command.package_name || 'packages'}` },
+      'dry_run_update': { icon: <Search className="h-4 w-4" />, label: `Checking dependencies for ${command.package_name || 'packages'}` },
+      'confirm_dependencies': { icon: <CheckCircle className="h-4 w-4" />, label: `Installing confirmed dependencies` },
+    };
+
+    return actionMap[command.command_type] || {
+      icon: <Activity className="h-4 w-4" />,
+      label: command.command_type.replace('_', ' ')
+    };
+  };
+
+  // Get command status
+  const getCommandStatus = (command: any) => {
+    switch (command.status) {
+      case 'pending':
+        return { text: 'Pending', color: 'text-amber-600 bg-amber-50 border-amber-200' };
+      case 'sent':
+        return { text: 'Sent to agent', color: 'text-blue-600 bg-blue-50 border-blue-200' };
+      case 'running':
+        return { text: 'Running', color: 'text-green-600 bg-green-50 border-green-200' };
+      case 'completed':
+        return { text: 'Completed', color: 'text-gray-600 bg-gray-50 border-gray-200' };
+      case 'failed':
+        return { text: 'Failed', color: 'text-red-600 bg-red-50 border-red-200' };
+      case 'timed_out':
+        return { text: 'Timed out', color: 'text-red-600 bg-red-50 border-red-200' };
+      default:
+        return { text: command.status, color: 'text-gray-600 bg-gray-50 border-gray-200' };
+    }
+  };
+
   // Get unique OS types for filter
   const osTypes = [...new Set(agents.map(agent => agent.os_type))];
 
@@ -203,19 +279,53 @@ const Agents: React.FC = () => {
           >
             ← Back to Agents
           </button>
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                {selectedAgent.hostname}
-              </h1>
-              <p className="mt-2 text-sm text-gray-600">
-                System details and update management for this agent
-              </p>
+
+          {/* New Compact Header Design */}
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-4">
+            <div className="flex-1 mb-4 sm:mb-0">
+              {/* Main hostname with integrated agent info */}
+              <div className="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0 sm:space-x-3 mb-2">
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
+                  {selectedAgent.hostname}
+                </h1>
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-gray-500">[Agent ID:</span>
+                  <span className="font-mono text-xs text-gray-700 bg-gray-100 px-2 py-1 rounded break-all">
+                    {selectedAgent.id}
+                  </span>
+                  <span className="text-gray-500">|</span>
+                  <span className="text-gray-500">Version:</span>
+                  <div className="flex items-center space-x-1">
+                    <span className="font-medium text-gray-900">
+                      {selectedAgent.current_version || 'Unknown'}
+                    </span>
+                    {selectedAgent.update_available === true && (
+                      <span className="flex items-center text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                        <AlertCircle className="h-3 w-3 mr-1" />
+                        Update Available
+                      </span>
+                    )}
+                    {selectedAgent.update_available === false && selectedAgent.current_version && (
+                      <span className="flex items-center text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Up to Date
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-gray-500">]</span>
+                </div>
+              </div>
+
+              {/* Sub-line with registration info only */}
+              <div className="text-sm text-gray-600">
+                <span>Registered {formatRelativeTime(selectedAgent.created_at)}</span>
+              </div>
             </div>
+
             <button
               onClick={() => handleScanAgent(selectedAgent.id)}
               disabled={scanAgentMutation.isPending}
-              className="btn btn-primary"
+              className="btn btn-primary sm:ml-4 w-full sm:w-auto"
             >
               {scanAgentMutation.isPending ? (
                 <RefreshCw className="animate-spin h-4 w-4 mr-2" />
@@ -227,88 +337,162 @@ const Agents: React.FC = () => {
           </div>
         </div>
 
+        {/* Tabs */}
+        <div className="mb-6">
+          <div className="border-b border-gray-200">
+            <nav className="-mb-px flex space-x-8">
+              <button
+                onClick={() => setActiveTab('overview')}
+                className={cn(
+                  'py-2 px-1 border-b-2 font-medium text-sm transition-colors',
+                  activeTab === 'overview'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                )}
+              >
+                Overview
+              </button>
+              <button
+                onClick={() => setActiveTab('history')}
+                className={cn(
+                  'py-2 px-1 border-b-2 font-medium text-sm transition-colors flex items-center space-x-2',
+                  activeTab === 'history'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                )}
+              >
+                <HistoryIcon className="h-4 w-4" />
+                <span>History</span>
+              </button>
+            </nav>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Agent info */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Agent Status Card */}
+          {/* Main content area */}
+          <div className="lg:col-span-2">
+            {activeTab === 'overview' ? (
+              <div className="space-y-6">
+            {/* Agent Status Card - Compact Timeline Style */}
             <div className="card">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-medium text-gray-900">Agent Status</h2>
-                <span className={cn('badge', getStatusColor(isOnline(selectedAgent.last_seen) ? 'online' : 'offline'))}>
-                  {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
-                </span>
+                <div className="flex items-center space-x-2">
+                  <div className={cn(
+                    'w-3 h-3 rounded-full',
+                    isOnline(selectedAgent.last_seen) ? 'bg-green-500' : 'bg-gray-400'
+                  )}></div>
+                  <span className={cn('badge', getStatusColor(isOnline(selectedAgent.last_seen) ? 'online' : 'offline'))}>
+                    {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
+                  </span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Agent Information */}
-                <div className="space-y-4">
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <h3 className="text-sm font-medium text-gray-900 mb-3">Agent Information</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <p className="text-xs text-gray-500">Agent ID</p>
-                        <p className="text-xs font-mono text-gray-700 break-all">
-                          {selectedAgent.id}
-                        </p>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <p className="text-xs text-gray-500">Version</p>
-                          <p className="text-xs font-medium text-gray-900">
-                            {selectedAgent.agent_version || selectedAgent.version || 'Unknown'}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Registered</p>
-                          <p className="text-xs font-medium text-gray-900">
-                            {formatRelativeTime(selectedAgent.created_at)}
-                          </p>
-                        </div>
-                      </div>
-                      {(() => {
-                        const meta = getSystemMetadata(selectedAgent);
-                        if (meta.installationTime !== 'Unknown') {
-                          return (
-                            <div>
-                              <p className="text-xs text-gray-500">Installation Time</p>
-                              <p className="text-xs font-medium text-gray-900">
-                                {formatRelativeTime(meta.installationTime)}
-                              </p>
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  </div>
-                </div>
+              {/* Compact Timeline Display */}
+              <div className="space-y-2 mb-3">
+                {(() => {
+                  const agentCommands = getAgentActiveCommands();
+                  const activeCommands = agentCommands.filter(cmd =>
+                    cmd.status === 'running' || cmd.status === 'sent' || cmd.status === 'pending'
+                  );
+                  const completedCommands = agentCommands.filter(cmd =>
+                    cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out'
+                  ).slice(0, 1); // Only show last completed
 
-                {/* Connection Status */}
-                <div className="space-y-4">
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center space-x-2 text-sm text-gray-600">
-                        <Activity className="h-4 w-4" />
-                        <span>Last Check-in</span>
-                      </div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {formatRelativeTime(selectedAgent.last_seen)}
-                      </p>
-                    </div>
+                  const displayCommands = [
+                    ...activeCommands.slice(0, 2), // Max 2 active
+                    ...completedCommands.slice(0, 1) // Max 1 completed
+                  ].slice(0, 3); // Total max 3 entries
 
-                    <div className="space-y-2">
-                      <div className="flex items-center space-x-2 text-sm text-gray-600">
-                        <Calendar className="h-4 w-4" />
-                        <span>Last Scan</span>
+                  if (displayCommands.length === 0) {
+                    return (
+                      <div className="text-center py-3 text-sm text-gray-500">
+                        No active operations
                       </div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {selectedAgent.last_scan
-                          ? formatRelativeTime(selectedAgent.last_scan)
-                          : 'Never'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                    );
+                  }
+
+                  return displayCommands.map((command, index) => {
+                    const displayInfo = getCommandDisplayInfo(command);
+                    const statusInfo = getCommandStatus(command);
+                    const isActive = command.status === 'running' || command.status === 'sent' || command.status === 'pending';
+
+                    return (
+                      <div key={command.id} className="flex items-start space-x-2 p-2 bg-gray-50 rounded border border-gray-200">
+                        <div className="flex-shrink-0 mt-0.5">
+                          {displayInfo.icon}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-gray-900 truncate">
+                              {isActive ? (
+                                <span className="flex items-center space-x-1">
+                                  <span className={cn(
+                                    'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
+                                    statusInfo.color
+                                  )}>
+                                    {command.status === 'running' && <RefreshCw className="h-3 w-3 animate-spin mr-1" />}
+                                    {command.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                                    {isActive ? command.status.replace('_', ' ') : statusInfo.text}
+                                  </span>
+                                  <span className="ml-1">{displayInfo.label}</span>
+                                </span>
+                              ) : (
+                                <span className="flex items-center space-x-1">
+                                  <span className={cn(
+                                    'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
+                                    statusInfo.color
+                                  )}>
+                                    {command.status === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
+                                    {command.status === 'failed' && <XCircle className="h-3 w-3 mr-1" />}
+                                    {statusInfo.text}
+                                  </span>
+                                  <span className="ml-1">{displayInfo.label}</span>
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-xs text-gray-500">
+                              {formatRelativeTime(command.created_at)}
+                            </span>
+                            {isActive && (command.status === 'pending' || command.status === 'sent') && (
+                              <button
+                                onClick={() => handleCancelCommand(command.id)}
+                                disabled={cancelCommandMutation.isPending}
+                                className="text-xs text-red-600 hover:text-red-800 disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Basic Status Info */}
+              <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-gray-200">
+                <span>Last seen: {formatRelativeTime(selectedAgent.last_seen)}</span>
+                <span>Last scan: {selectedAgent.last_scan ? formatRelativeTime(selectedAgent.last_scan) : 'Never'}</span>
+              </div>
+
+              {/* Action Button */}
+              <div className="flex justify-center mt-3 pt-3 border-t border-gray-200">
+                <button
+                  onClick={() => handleScanAgent(selectedAgent.id)}
+                  disabled={scanAgentMutation.isPending}
+                  className="btn btn-primary w-full sm:w-auto text-sm"
+                >
+                  {scanAgentMutation.isPending ? (
+                    <RefreshCw className="animate-spin h-4 w-4 mr-2" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  Scan Now
+                </button>
               </div>
             </div>
 
@@ -444,6 +628,12 @@ const Agents: React.FC = () => {
               {/* System Updates */}
               <AgentSystemUpdates agentId={selectedAgent.id} />
 
+              </div>
+            ) : (
+              <div>
+                <HistoryTimeline agentId={selectedAgent.id} />
+              </div>
+            )}
           </div>
 
           {/* Quick actions */}
@@ -603,7 +793,7 @@ const Agents: React.FC = () => {
           <Computer className="mx-auto h-12 w-12 text-gray-400" />
           <h3 className="mt-2 text-sm font-medium text-gray-900">No agents found</h3>
           <p className="mt-1 text-sm text-gray-500">
-            {searchQuery || statusFilter !== 'all' || osFilter !== 'all'
+            {debouncedSearchQuery || statusFilter !== 'all' || osFilter !== 'all'
               ? 'Try adjusting your search or filters.'
               : 'No agents have registered with the server yet.'}
           </p>
@@ -624,6 +814,7 @@ const Agents: React.FC = () => {
                   </th>
                   <th className="table-header">Agent</th>
                   <th className="table-header">Status</th>
+                  <th className="table-header">Version</th>
                   <th className="table-header">OS</th>
                   <th className="table-header">Last Check-in</th>
                   <th className="table-header">Last Scan</th>
@@ -672,6 +863,25 @@ const Agents: React.FC = () => {
                       <span className={cn('badge', getStatusColor(isOnline(agent.last_seen) ? 'online' : 'offline'))}>
                         {isOnline(agent.last_seen) ? 'Online' : 'Offline'}
                       </span>
+                    </td>
+                    <td className="table-cell">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm text-gray-900">
+                          {agent.current_version || 'Unknown'}
+                        </span>
+                        {agent.update_available === true && (
+                          <span className="flex items-center text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
+                            <Download className="h-3 w-3 mr-1" />
+                            Update
+                          </span>
+                        )}
+                        {agent.update_available === false && agent.current_version && (
+                          <span className="flex items-center text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                            <CheckCircle className="h-3 w-3 mr-1" />
+                            Current
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="table-cell">
                       <div className="text-sm text-gray-900">

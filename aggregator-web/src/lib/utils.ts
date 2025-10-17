@@ -110,6 +110,10 @@ export const getStatusColor = (status: string): string => {
       return 'text-danger-600 bg-danger-100';
     case 'pending':
       return 'text-warning-600 bg-warning-100';
+    case 'checking_dependencies':
+      return 'text-blue-500 bg-blue-100';
+    case 'pending_dependencies':
+      return 'text-orange-600 bg-orange-100';
     case 'approved':
     case 'scheduled':
       return 'text-blue-600 bg-blue-100';

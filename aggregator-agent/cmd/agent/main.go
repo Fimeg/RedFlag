@@ -6,6 +6,8 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aggregator-project/aggregator-agent/internal/cache"
@@ -19,27 +21,68 @@ import (
 )
 
 const (
-	AgentVersion = "0.1.0"
-	ConfigPath   = "/etc/aggregator/config.json"
+	AgentVersion = "0.1.5" // Command status synchronization, timeout fixes, DNF improvements
 )
+
+// getConfigPath returns the platform-specific config path
+func getConfigPath() string {
+	if runtime.GOOS == "windows" {
+		return "C:\\ProgramData\\RedFlag\\config.json"
+	}
+	return "/etc/aggregator/config.json"
+}
+
+// getDefaultServerURL returns the default server URL with environment variable support
+func getDefaultServerURL() string {
+	// Check environment variable first
+	if envURL := os.Getenv("REDFLAG_SERVER_URL"); envURL != "" {
+		return envURL
+	}
+
+	// Platform-specific defaults
+	if runtime.GOOS == "windows" {
+		// For Windows, use a placeholder that prompts users to configure
+		return "http://REPLACE_WITH_SERVER_IP:8080"
+	}
+	return "http://localhost:8080"
+}
 
 func main() {
 	registerCmd := flag.Bool("register", false, "Register agent with server")
 	scanCmd := flag.Bool("scan", false, "Scan for updates and display locally")
 	statusCmd := flag.Bool("status", false, "Show agent status")
 	listUpdatesCmd := flag.Bool("list-updates", false, "List detailed update information")
-	serverURL := flag.String("server", "http://localhost:8080", "Server URL")
+	serverURL := flag.String("server", getDefaultServerURL(), "Server URL")
 	exportFormat := flag.String("export", "", "Export format: json, csv")
 	flag.Parse()
 
 	// Load configuration
-	cfg, err := config.Load(ConfigPath)
+	cfg, err := config.Load(getConfigPath())
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
 	}
 
 	// Handle registration
 	if *registerCmd {
+		// Validate server URL for Windows users
+		if runtime.GOOS == "windows" && strings.Contains(*serverURL, "REPLACE_WITH_SERVER_IP") {
+			fmt.Println("❌ CONFIGURATION REQUIRED!")
+			fmt.Println("==================================================================")
+			fmt.Println("Please configure the server URL before registering:")
+			fmt.Println("")
+			fmt.Println("Option 1 - Use the -server flag:")
+			fmt.Printf("   redflag-agent.exe -register -server http://10.10.20.159:8080\n")
+			fmt.Println("")
+			fmt.Println("Option 2 - Use environment variable:")
+			fmt.Println("   set REDFLAG_SERVER_URL=http://10.10.20.159:8080")
+			fmt.Println("   redflag-agent.exe -register")
+			fmt.Println("")
+			fmt.Println("Option 3 - Create a .env file:")
+			fmt.Println("   REDFLAG_SERVER_URL=http://10.10.20.159:8080")
+			fmt.Println("==================================================================")
+			os.Exit(1)
+		}
+
 		if err := registerAgent(cfg, *serverURL); err != nil {
 			log.Fatal("Registration failed:", err)
 		}
@@ -161,6 +204,7 @@ func registerAgent(cfg *config.Config, serverURL string) error {
 	cfg.ServerURL = serverURL
 	cfg.AgentID = resp.AgentID
 	cfg.Token = resp.Token
+	cfg.RefreshToken = resp.RefreshToken
 
 	// Get check-in interval from server config
 	if interval, ok := resp.Config["check_in_interval"].(float64); ok {
@@ -170,7 +214,44 @@ func registerAgent(cfg *config.Config, serverURL string) error {
 	}
 
 	// Save configuration
-	return cfg.Save(ConfigPath)
+	return cfg.Save(getConfigPath())
+}
+
+// renewTokenIfNeeded handles 401 errors by renewing the agent token using refresh token
+func renewTokenIfNeeded(apiClient *client.Client, cfg *config.Config, err error) (*client.Client, error) {
+	if err != nil && strings.Contains(err.Error(), "401 Unauthorized") {
+		log.Printf("🔄 Access token expired - attempting renewal with refresh token...")
+
+		// Check if we have a refresh token
+		if cfg.RefreshToken == "" {
+			log.Printf("❌ No refresh token available - re-registration required")
+			return nil, fmt.Errorf("refresh token missing - please re-register agent")
+		}
+
+		// Create temporary client without token for renewal
+		tempClient := client.NewClient(cfg.ServerURL, "")
+
+		// Attempt to renew access token using refresh token
+		if err := tempClient.RenewToken(cfg.AgentID, cfg.RefreshToken); err != nil {
+			log.Printf("❌ Refresh token renewal failed: %v", err)
+			log.Printf("💡 Refresh token may be expired (>90 days) - re-registration required")
+			return nil, fmt.Errorf("refresh token renewal failed: %w - please re-register agent", err)
+		}
+
+		// Update config with new access token (agent ID and refresh token stay the same!)
+		cfg.Token = tempClient.GetToken()
+
+		// Save updated config
+		if err := cfg.Save(getConfigPath()); err != nil {
+			log.Printf("⚠️  Warning: Failed to save renewed access token: %v", err)
+		}
+
+		log.Printf("✅ Access token renewed successfully - agent ID maintained: %s", cfg.AgentID)
+		return tempClient, nil
+	}
+
+	// Return original client if no 401 error
+	return apiClient, nil
 }
 
 func runAgent(cfg *config.Config) error {
@@ -189,6 +270,8 @@ func runAgent(cfg *config.Config) error {
 	aptScanner := scanner.NewAPTScanner()
 	dnfScanner := scanner.NewDNFScanner()
 	dockerScanner, _ := scanner.NewDockerScanner()
+	windowsUpdateScanner := scanner.NewWindowsUpdateScanner()
+	wingetScanner := scanner.NewWingetScanner()
 
 	// Main check-in loop
 	for {
@@ -196,14 +279,57 @@ func runAgent(cfg *config.Config) error {
 		jitter := time.Duration(rand.Intn(30)) * time.Second
 		time.Sleep(jitter)
 
-		log.Println("Checking in with server...")
+		log.Printf("Checking in with server... (Agent v%s)", AgentVersion)
 
-		// Get commands from server
-		commands, err := apiClient.GetCommands(cfg.AgentID)
+		// Collect lightweight system metrics
+		sysMetrics, err := system.GetLightweightMetrics()
+		var metrics *client.SystemMetrics
+		if err == nil {
+			metrics = &client.SystemMetrics{
+				CPUPercent:    sysMetrics.CPUPercent,
+				MemoryPercent: sysMetrics.MemoryPercent,
+				MemoryUsedGB:  sysMetrics.MemoryUsedGB,
+				MemoryTotalGB: sysMetrics.MemoryTotalGB,
+				DiskUsedGB:    sysMetrics.DiskUsedGB,
+				DiskTotalGB:   sysMetrics.DiskTotalGB,
+				DiskPercent:   sysMetrics.DiskPercent,
+				Uptime:        sysMetrics.Uptime,
+				Version:       AgentVersion,
+			}
+		}
+
+		// Get commands from server (with optional metrics)
+		commands, err := apiClient.GetCommands(cfg.AgentID, metrics)
 		if err != nil {
-			log.Printf("Error getting commands: %v\n", err)
-			time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
-			continue
+			// Try to renew token if we got a 401 error
+			newClient, renewErr := renewTokenIfNeeded(apiClient, cfg, err)
+			if renewErr != nil {
+				log.Printf("Check-in unsuccessful and token renewal failed: %v\n", renewErr)
+				time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+				continue
+			}
+
+			// If token was renewed, update client and retry
+			if newClient != apiClient {
+				log.Printf("🔄 Retrying check-in with renewed token...")
+				apiClient = newClient
+				commands, err = apiClient.GetCommands(cfg.AgentID, metrics)
+				if err != nil {
+					log.Printf("Check-in unsuccessful even after token renewal: %v\n", err)
+					time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+					continue
+				}
+			} else {
+				log.Printf("Check-in unsuccessful: %v\n", err)
+				time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+				continue
+			}
+		}
+
+		if len(commands) == 0 {
+			log.Printf("Check-in successful - no new commands")
+		} else {
+			log.Printf("Check-in successful - received %d command(s)", len(commands))
 		}
 
 		// Process each command
@@ -212,16 +338,26 @@ func runAgent(cfg *config.Config) error {
 
 			switch cmd.Type {
 			case "scan_updates":
-				if err := handleScanUpdates(apiClient, cfg, aptScanner, dnfScanner, dockerScanner, cmd.ID); err != nil {
+				if err := handleScanUpdates(apiClient, cfg, aptScanner, dnfScanner, dockerScanner, windowsUpdateScanner, wingetScanner, cmd.ID); err != nil {
 					log.Printf("Error scanning updates: %v\n", err)
 				}
 
 			case "collect_specs":
 				log.Println("Spec collection not yet implemented")
 
+			case "dry_run_update":
+				if err := handleDryRunUpdate(apiClient, cfg, cmd.ID, cmd.Params); err != nil {
+					log.Printf("Error dry running update: %v\n", err)
+				}
+
 			case "install_updates":
 				if err := handleInstallUpdates(apiClient, cfg, cmd.ID, cmd.Params); err != nil {
 					log.Printf("Error installing updates: %v\n", err)
+				}
+
+			case "confirm_dependencies":
+				if err := handleConfirmDependencies(apiClient, cfg, cmd.ID, cmd.Params); err != nil {
+					log.Printf("Error confirming dependencies: %v\n", err)
 				}
 
 			default:
@@ -234,7 +370,7 @@ func runAgent(cfg *config.Config) error {
 	}
 }
 
-func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner *scanner.APTScanner, dnfScanner *scanner.DNFScanner, dockerScanner *scanner.DockerScanner, commandID string) error {
+func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner *scanner.APTScanner, dnfScanner *scanner.DNFScanner, dockerScanner *scanner.DockerScanner, windowsUpdateScanner *scanner.WindowsUpdateScanner, wingetScanner *scanner.WingetScanner, commandID string) error {
 	log.Println("Scanning for updates...")
 
 	var allUpdates []client.UpdateReportItem
@@ -275,6 +411,30 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		}
 	}
 
+	// Scan Windows updates
+	if windowsUpdateScanner.IsAvailable() {
+		log.Println("  - Scanning Windows updates...")
+		updates, err := windowsUpdateScanner.Scan()
+		if err != nil {
+			log.Printf("    Windows Update scan failed: %v\n", err)
+		} else {
+			log.Printf("    Found %d Windows updates\n", len(updates))
+			allUpdates = append(allUpdates, updates...)
+		}
+	}
+
+	// Scan Winget packages
+	if wingetScanner.IsAvailable() {
+		log.Println("  - Scanning Winget packages...")
+		updates, err := wingetScanner.Scan()
+		if err != nil {
+			log.Printf("    Winget scan failed: %v\n", err)
+		} else {
+			log.Printf("    Found %d Winget package updates\n", len(updates))
+			allUpdates = append(allUpdates, updates...)
+		}
+	}
+
 	// Report to server
 	if len(allUpdates) > 0 {
 		report := client.UpdateReport{
@@ -301,6 +461,8 @@ func handleScanCommand(cfg *config.Config, exportFormat string) error {
 	aptScanner := scanner.NewAPTScanner()
 	dnfScanner := scanner.NewDNFScanner()
 	dockerScanner, _ := scanner.NewDockerScanner()
+	windowsUpdateScanner := scanner.NewWindowsUpdateScanner()
+	wingetScanner := scanner.NewWingetScanner()
 
 	fmt.Println("🔍 Scanning for updates...")
 	var allUpdates []client.UpdateReportItem
@@ -337,6 +499,30 @@ func handleScanCommand(cfg *config.Config, exportFormat string) error {
 			fmt.Printf("    ⚠️  Docker scan failed: %v\n", err)
 		} else {
 			fmt.Printf("    ✓ Found %d Docker image updates\n", len(updates))
+			allUpdates = append(allUpdates, updates...)
+		}
+	}
+
+	// Scan Windows updates
+	if windowsUpdateScanner.IsAvailable() {
+		fmt.Println("  - Scanning Windows updates...")
+		updates, err := windowsUpdateScanner.Scan()
+		if err != nil {
+			fmt.Printf("    ⚠️  Windows Update scan failed: %v\n", err)
+		} else {
+			fmt.Printf("    ✓ Found %d Windows updates\n", len(updates))
+			allUpdates = append(allUpdates, updates...)
+		}
+	}
+
+	// Scan Winget packages
+	if wingetScanner.IsAvailable() {
+		fmt.Println("  - Scanning Winget packages...")
+		updates, err := wingetScanner.Scan()
+		if err != nil {
+			fmt.Printf("    ⚠️  Winget scan failed: %v\n", err)
+		} else {
+			fmt.Printf("    ✓ Found %d Winget package updates\n", len(updates))
 			allUpdates = append(allUpdates, updates...)
 		}
 	}
@@ -438,16 +624,12 @@ func handleInstallUpdates(apiClient *client.Client, cfg *config.Config, commandI
 	// Parse parameters
 	packageType := ""
 	packageName := ""
-	targetVersion := ""
 
 	if pt, ok := params["package_type"].(string); ok {
 		packageType = pt
 	}
 	if pn, ok := params["package_name"].(string); ok {
 		packageName = pn
-	}
-	if tv, ok := params["target_version"].(string); ok {
-		targetVersion = tv
 	}
 
 	// Validate package type
@@ -478,7 +660,7 @@ func handleInstallUpdates(apiClient *client.Client, cfg *config.Config, commandI
 		// Multiple packages might be specified in various ways
 		var packageNames []string
 		for key, value := range params {
-			if key != "package_type" && key != "target_version" {
+			if key != "package_type" {
 				if name, ok := value.(string); ok && name != "" {
 					packageNames = append(packageNames, name)
 				}
@@ -547,6 +729,232 @@ func handleInstallUpdates(apiClient *client.Client, cfg *config.Config, commandI
 		}
 	} else {
 		log.Printf("✗ Installation failed after %d seconds\n", result.DurationSeconds)
+		log.Printf("  Error: %s\n", result.ErrorMessage)
+	}
+
+	return nil
+}
+
+// handleDryRunUpdate handles dry_run_update command
+func handleDryRunUpdate(apiClient *client.Client, cfg *config.Config, commandID string, params map[string]interface{}) error {
+	log.Println("Performing dry run update...")
+
+	// Parse parameters
+	packageType := ""
+	packageName := ""
+
+	if pt, ok := params["package_type"].(string); ok {
+		packageType = pt
+	}
+	if pn, ok := params["package_name"].(string); ok {
+		packageName = pn
+	}
+
+	// Validate parameters
+	if packageType == "" || packageName == "" {
+		return fmt.Errorf("package_type and package_name parameters are required")
+	}
+
+	// Create installer based on package type
+	inst, err := installer.InstallerFactory(packageType)
+	if err != nil {
+		return fmt.Errorf("failed to create installer for package type %s: %w", packageType, err)
+	}
+
+	// Check if installer is available
+	if !inst.IsAvailable() {
+		return fmt.Errorf("%s installer is not available on this system", packageType)
+	}
+
+	// Perform dry run
+	log.Printf("Dry running package: %s (type: %s)", packageName, packageType)
+	result, err := inst.DryRun(packageName)
+	if err != nil {
+		// Report dry run failure
+		logReport := client.LogReport{
+			CommandID:       commandID,
+			Action:          "dry_run",
+			Result:          "failed",
+			Stdout:          "",
+			Stderr:          fmt.Sprintf("Dry run error: %v", err),
+			ExitCode:        1,
+			DurationSeconds: 0,
+		}
+
+		if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+			log.Printf("Failed to report dry run failure: %v\n", reportErr)
+		}
+
+		return fmt.Errorf("dry run failed: %w", err)
+	}
+
+	// Convert installer.InstallResult to client.InstallResult for reporting
+	clientResult := &client.InstallResult{
+		Success:          result.Success,
+		ErrorMessage:     result.ErrorMessage,
+		Stdout:          result.Stdout,
+		Stderr:          result.Stderr,
+		ExitCode:        result.ExitCode,
+		DurationSeconds: result.DurationSeconds,
+		Action:          result.Action,
+		PackagesInstalled: result.PackagesInstalled,
+		ContainersUpdated: result.ContainersUpdated,
+		Dependencies:    result.Dependencies,
+		IsDryRun:        true,
+	}
+
+	// Report dependencies back to server
+	depReport := client.DependencyReport{
+		PackageName:   packageName,
+		PackageType:   packageType,
+		Dependencies:  result.Dependencies,
+		UpdateID:      params["update_id"].(string),
+		DryRunResult:  clientResult,
+	}
+
+	if reportErr := apiClient.ReportDependencies(cfg.AgentID, depReport); reportErr != nil {
+		log.Printf("Failed to report dependencies: %v\n", reportErr)
+		return fmt.Errorf("failed to report dependencies: %w", reportErr)
+	}
+
+	// Report dry run success
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          "dry_run",
+		Result:          "success",
+		Stdout:          result.Stdout,
+		Stderr:          result.Stderr,
+		ExitCode:        result.ExitCode,
+		DurationSeconds: result.DurationSeconds,
+	}
+
+	if len(result.Dependencies) > 0 {
+		logReport.Stdout += fmt.Sprintf("\nDependencies found: %v", result.Dependencies)
+	}
+
+	if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+		log.Printf("Failed to report dry run success: %v\n", reportErr)
+	}
+
+	if result.Success {
+		log.Printf("✓ Dry run completed successfully in %d seconds\n", result.DurationSeconds)
+		if len(result.Dependencies) > 0 {
+			log.Printf("  Dependencies found: %v\n", result.Dependencies)
+		} else {
+			log.Printf("  No additional dependencies found\n")
+		}
+	} else {
+		log.Printf("✗ Dry run failed after %d seconds\n", result.DurationSeconds)
+		log.Printf("  Error: %s\n", result.ErrorMessage)
+	}
+
+	return nil
+}
+
+// handleConfirmDependencies handles confirm_dependencies command
+func handleConfirmDependencies(apiClient *client.Client, cfg *config.Config, commandID string, params map[string]interface{}) error {
+	log.Println("Installing update with confirmed dependencies...")
+
+	// Parse parameters
+	packageType := ""
+	packageName := ""
+	var dependencies []string
+
+	if pt, ok := params["package_type"].(string); ok {
+		packageType = pt
+	}
+	if pn, ok := params["package_name"].(string); ok {
+		packageName = pn
+	}
+	if deps, ok := params["dependencies"].([]interface{}); ok {
+		for _, dep := range deps {
+			if depStr, ok := dep.(string); ok {
+				dependencies = append(dependencies, depStr)
+			}
+		}
+	}
+
+	// Validate parameters
+	if packageType == "" || packageName == "" {
+		return fmt.Errorf("package_type and package_name parameters are required")
+	}
+
+	// Create installer based on package type
+	inst, err := installer.InstallerFactory(packageType)
+	if err != nil {
+		return fmt.Errorf("failed to create installer for package type %s: %w", packageType, err)
+	}
+
+	// Check if installer is available
+	if !inst.IsAvailable() {
+		return fmt.Errorf("%s installer is not available on this system", packageType)
+	}
+
+	var result *installer.InstallResult
+	var action string
+
+	// Perform installation with dependencies
+	if len(dependencies) > 0 {
+		action = "install_with_dependencies"
+		log.Printf("Installing package with dependencies: %s (dependencies: %v)", packageName, dependencies)
+		// Install main package + dependencies
+		allPackages := append([]string{packageName}, dependencies...)
+		result, err = inst.InstallMultiple(allPackages)
+	} else {
+		action = "install"
+		log.Printf("Installing package: %s (no dependencies)", packageName)
+		result, err = inst.Install(packageName)
+	}
+
+	if err != nil {
+		// Report installation failure
+		logReport := client.LogReport{
+			CommandID:       commandID,
+			Action:          action,
+			Result:          "failed",
+			Stdout:          "",
+			Stderr:          fmt.Sprintf("Installation error: %v", err),
+			ExitCode:        1,
+			DurationSeconds: 0,
+		}
+
+		if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+			log.Printf("Failed to report installation failure: %v\n", reportErr)
+		}
+
+		return fmt.Errorf("installation failed: %w", err)
+	}
+
+	// Report installation success
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          result.Action,
+		Result:          "success",
+		Stdout:          result.Stdout,
+		Stderr:          result.Stderr,
+		ExitCode:        result.ExitCode,
+		DurationSeconds: result.DurationSeconds,
+	}
+
+	// Add additional metadata to the log report
+	if len(result.PackagesInstalled) > 0 {
+		logReport.Stdout += fmt.Sprintf("\nPackages installed: %v", result.PackagesInstalled)
+	}
+	if len(dependencies) > 0 {
+		logReport.Stdout += fmt.Sprintf("\nDependencies included: %v", dependencies)
+	}
+
+	if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+		log.Printf("Failed to report installation success: %v\n", reportErr)
+	}
+
+	if result.Success {
+		log.Printf("✓ Installation with dependencies completed successfully in %d seconds\n", result.DurationSeconds)
+		if len(result.PackagesInstalled) > 0 {
+			log.Printf("  Packages installed: %v\n", result.PackagesInstalled)
+		}
+	} else {
+		log.Printf("✗ Installation with dependencies failed after %d seconds\n", result.DurationSeconds)
 		log.Printf("  Error: %s\n", result.ErrorMessage)
 	}
 
