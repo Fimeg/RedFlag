@@ -273,11 +273,26 @@ func runAgent(cfg *config.Config) error {
 	windowsUpdateScanner := scanner.NewWindowsUpdateScanner()
 	wingetScanner := scanner.NewWingetScanner()
 
+	// System info tracking
+	var lastSystemInfoUpdate time.Time
+	const systemInfoUpdateInterval = 1 * time.Hour // Update detailed system info every hour
+
 	// Main check-in loop
 	for {
 		// Add jitter to prevent thundering herd
 		jitter := time.Duration(rand.Intn(30)) * time.Second
 		time.Sleep(jitter)
+
+		// Check if we need to send detailed system info update
+		if time.Since(lastSystemInfoUpdate) >= systemInfoUpdateInterval {
+			log.Printf("Updating detailed system information...")
+			if err := reportSystemInfo(apiClient, cfg); err != nil {
+				log.Printf("Failed to report system info: %v\n", err)
+			} else {
+				lastSystemInfoUpdate = time.Now()
+				log.Printf("✓ System information updated\n")
+			}
+		}
 
 		log.Printf("Checking in with server... (Agent v%s)", AgentVersion)
 
@@ -374,17 +389,25 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 	log.Println("Scanning for updates...")
 
 	var allUpdates []client.UpdateReportItem
+	var scanErrors []string
+	var scanResults []string
 
 	// Scan APT updates
 	if aptScanner.IsAvailable() {
 		log.Println("  - Scanning APT packages...")
 		updates, err := aptScanner.Scan()
 		if err != nil {
-			log.Printf("    APT scan failed: %v\n", err)
+			errorMsg := fmt.Sprintf("APT scan failed: %v", err)
+			log.Printf("    %s\n", errorMsg)
+			scanErrors = append(scanErrors, errorMsg)
 		} else {
-			log.Printf("    Found %d APT updates\n", len(updates))
+			resultMsg := fmt.Sprintf("Found %d APT updates", len(updates))
+			log.Printf("    %s\n", resultMsg)
+			scanResults = append(scanResults, resultMsg)
 			allUpdates = append(allUpdates, updates...)
 		}
+	} else {
+		scanResults = append(scanResults, "APT scanner not available")
 	}
 
 	// Scan DNF updates
@@ -392,11 +415,17 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		log.Println("  - Scanning DNF packages...")
 		updates, err := dnfScanner.Scan()
 		if err != nil {
-			log.Printf("    DNF scan failed: %v\n", err)
+			errorMsg := fmt.Sprintf("DNF scan failed: %v", err)
+			log.Printf("    %s\n", errorMsg)
+			scanErrors = append(scanErrors, errorMsg)
 		} else {
-			log.Printf("    Found %d DNF updates\n", len(updates))
+			resultMsg := fmt.Sprintf("Found %d DNF updates", len(updates))
+			log.Printf("    %s\n", resultMsg)
+			scanResults = append(scanResults, resultMsg)
 			allUpdates = append(allUpdates, updates...)
 		}
+	} else {
+		scanResults = append(scanResults, "DNF scanner not available")
 	}
 
 	// Scan Docker updates
@@ -404,11 +433,17 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		log.Println("  - Scanning Docker images...")
 		updates, err := dockerScanner.Scan()
 		if err != nil {
-			log.Printf("    Docker scan failed: %v\n", err)
+			errorMsg := fmt.Sprintf("Docker scan failed: %v", err)
+			log.Printf("    %s\n", errorMsg)
+			scanErrors = append(scanErrors, errorMsg)
 		} else {
-			log.Printf("    Found %d Docker image updates\n", len(updates))
+			resultMsg := fmt.Sprintf("Found %d Docker image updates", len(updates))
+			log.Printf("    %s\n", resultMsg)
+			scanResults = append(scanResults, resultMsg)
 			allUpdates = append(allUpdates, updates...)
 		}
+	} else {
+		scanResults = append(scanResults, "Docker scanner not available")
 	}
 
 	// Scan Windows updates
@@ -416,11 +451,17 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		log.Println("  - Scanning Windows updates...")
 		updates, err := windowsUpdateScanner.Scan()
 		if err != nil {
-			log.Printf("    Windows Update scan failed: %v\n", err)
+			errorMsg := fmt.Sprintf("Windows Update scan failed: %v", err)
+			log.Printf("    %s\n", errorMsg)
+			scanErrors = append(scanErrors, errorMsg)
 		} else {
-			log.Printf("    Found %d Windows updates\n", len(updates))
+			resultMsg := fmt.Sprintf("Found %d Windows updates", len(updates))
+			log.Printf("    %s\n", resultMsg)
+			scanResults = append(scanResults, resultMsg)
 			allUpdates = append(allUpdates, updates...)
 		}
+	} else {
+		scanResults = append(scanResults, "Windows Update scanner not available")
 	}
 
 	// Scan Winget packages
@@ -428,14 +469,58 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		log.Println("  - Scanning Winget packages...")
 		updates, err := wingetScanner.Scan()
 		if err != nil {
-			log.Printf("    Winget scan failed: %v\n", err)
+			errorMsg := fmt.Sprintf("Winget scan failed: %v", err)
+			log.Printf("    %s\n", errorMsg)
+			scanErrors = append(scanErrors, errorMsg)
 		} else {
-			log.Printf("    Found %d Winget package updates\n", len(updates))
+			resultMsg := fmt.Sprintf("Found %d Winget package updates", len(updates))
+			log.Printf("    %s\n", resultMsg)
+			scanResults = append(scanResults, resultMsg)
 			allUpdates = append(allUpdates, updates...)
 		}
+	} else {
+		scanResults = append(scanResults, "Winget scanner not available")
 	}
 
-	// Report to server
+	// Report scan results to server (both successes and failures)
+	success := len(allUpdates) > 0 || len(scanErrors) == 0
+	var combinedOutput string
+
+	// Combine all scan results
+	if len(scanResults) > 0 {
+		combinedOutput += "Scan Results:\n" + strings.Join(scanResults, "\n")
+	}
+	if len(scanErrors) > 0 {
+		if combinedOutput != "" {
+			combinedOutput += "\n"
+		}
+		combinedOutput += "Scan Errors:\n" + strings.Join(scanErrors, "\n")
+	}
+	if len(allUpdates) > 0 {
+		if combinedOutput != "" {
+			combinedOutput += "\n"
+		}
+		combinedOutput += fmt.Sprintf("Total Updates Found: %d", len(allUpdates))
+	}
+
+	// Create scan log entry
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          "scan_updates",
+		Result:          map[bool]string{true: "success", false: "failure"}[success],
+		Stdout:          combinedOutput,
+		Stderr:          strings.Join(scanErrors, "\n"),
+		ExitCode:        map[bool]int{true: 0, false: 1}[success],
+		DurationSeconds: 0, // Could track scan duration if needed
+	}
+
+	// Report the scan log
+	if err := apiClient.ReportLog(cfg.AgentID, logReport); err != nil {
+		log.Printf("Failed to report scan log: %v\n", err)
+		// Continue anyway - updates are more important
+	}
+
+	// Report updates to server if any were found
 	if len(allUpdates) > 0 {
 		report := client.UpdateReport{
 			CommandID: commandID,
@@ -450,6 +535,11 @@ func handleScanUpdates(apiClient *client.Client, cfg *config.Config, aptScanner 
 		log.Printf("✓ Reported %d updates to server\n", len(allUpdates))
 	} else {
 		log.Println("✓ No updates found")
+	}
+
+	// Return error if there were any scan failures
+	if len(scanErrors) > 0 && len(allUpdates) == 0 {
+		return fmt.Errorf("all scanners failed: %s", strings.Join(scanErrors, "; "))
 	}
 
 	return nil
@@ -956,6 +1046,58 @@ func handleConfirmDependencies(apiClient *client.Client, cfg *config.Config, com
 	} else {
 		log.Printf("✗ Installation with dependencies failed after %d seconds\n", result.DurationSeconds)
 		log.Printf("  Error: %s\n", result.ErrorMessage)
+	}
+
+	return nil
+}
+
+// reportSystemInfo collects and reports detailed system information to the server
+func reportSystemInfo(apiClient *client.Client, cfg *config.Config) error {
+	// Collect detailed system information
+	sysInfo, err := system.GetSystemInfo(AgentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to get system info: %w", err)
+	}
+
+	// Create system info report
+	report := client.SystemInfoReport{
+		Timestamp:   time.Now(),
+		CPUModel:     sysInfo.CPUInfo.ModelName,
+		CPUCores:     sysInfo.CPUInfo.Cores,
+		CPUThreads:   sysInfo.CPUInfo.Threads,
+		MemoryTotal:  sysInfo.MemoryInfo.Total,
+		DiskTotal:    uint64(0),
+		DiskUsed:     uint64(0),
+		IPAddress:    sysInfo.IPAddress,
+		Processes:    sysInfo.RunningProcesses,
+		Uptime:       sysInfo.Uptime,
+		Metadata:     make(map[string]interface{}),
+	}
+
+	// Add primary disk info
+	if len(sysInfo.DiskInfo) > 0 {
+		primaryDisk := sysInfo.DiskInfo[0]
+		report.DiskTotal = primaryDisk.Total
+		report.DiskUsed = primaryDisk.Used
+		report.Metadata["disk_mount"] = primaryDisk.Mountpoint
+		report.Metadata["disk_filesystem"] = primaryDisk.Filesystem
+	}
+
+	// Add collection timestamp and additional metadata
+	report.Metadata["collected_at"] = time.Now().Format(time.RFC3339)
+	report.Metadata["hostname"] = sysInfo.Hostname
+	report.Metadata["os_type"] = sysInfo.OSType
+	report.Metadata["os_version"] = sysInfo.OSVersion
+	report.Metadata["os_architecture"] = sysInfo.OSArchitecture
+
+	// Add any existing metadata from system info
+	for key, value := range sysInfo.Metadata {
+		report.Metadata[key] = value
+	}
+
+	// Report to server
+	if err := apiClient.ReportSystemInfo(cfg.AgentID, report); err != nil {
+		return fmt.Errorf("failed to report system info: %w", err)
 	}
 
 	return nil

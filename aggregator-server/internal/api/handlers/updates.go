@@ -453,7 +453,56 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 		return
 	}
 
-	// Update the package status to pending_dependencies
+	// If there are NO dependencies, auto-approve and proceed directly to installation
+	// This prevents updates with zero dependencies from getting stuck in "pending_dependencies"
+	if len(req.Dependencies) == 0 {
+		// Get the update by package to retrieve its ID
+		update, err := h.updateQueries.GetUpdateByPackage(agentID, req.PackageType, req.PackageName)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get update details"})
+			return
+		}
+
+		// Record that dependencies were checked (empty array) in metadata
+		if err := h.updateQueries.SetPendingDependencies(agentID, req.PackageType, req.PackageName, req.Dependencies); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package metadata"})
+			return
+		}
+
+		// Automatically create installation command since no dependencies need approval
+		command := &models.AgentCommand{
+			ID:          uuid.New(),
+			AgentID:     agentID,
+			CommandType: models.CommandTypeConfirmDependencies,
+			Params: map[string]interface{}{
+				"update_id":     update.ID.String(),
+				"package_name":  req.PackageName,
+				"package_type":  req.PackageType,
+				"dependencies":  []string{}, // Empty dependencies array
+			},
+			Status:    models.CommandStatusPending,
+			CreatedAt: time.Now(),
+		}
+
+		if err := h.commandQueries.CreateCommand(command); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create installation command"})
+			return
+		}
+
+		// Update status to installing since no approval needed
+		if err := h.updateQueries.InstallUpdate(update.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package status to installing"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "no dependencies found - installation command created automatically",
+			"command_id": command.ID.String(),
+		})
+		return
+	}
+
+	// If dependencies EXIST, require manual approval by setting status to pending_dependencies
 	if err := h.updateQueries.SetPendingDependencies(agentID, req.PackageType, req.PackageName, req.Dependencies); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package status"})
 		return

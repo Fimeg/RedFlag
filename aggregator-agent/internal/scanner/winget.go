@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aggregator-project/aggregator-agent/internal/client"
 )
@@ -66,9 +67,17 @@ func (s *WingetScanner) Scan() ([]client.UpdateReportItem, error) {
 		fmt.Printf("Winget basic scan failed: %v\n", err)
 	}
 
-	// Method 3: Check if this is a known Winget issue and provide helpful error
+	// Method 3: Attempt automatic recovery for known issues
 	if isKnownWingetError(lastErr) {
-		return nil, fmt.Errorf("winget encountered a known issue (exit code %s). This may be due to Windows Update service or system configuration. Try running 'winget upgrade' manually to resolve", getExitCode(lastErr))
+		fmt.Printf("Attempting automatic winget recovery...\n")
+		if updates, err := s.attemptWingetRecovery(); err == nil {
+			fmt.Printf("Winget recovery successful, found %d updates\n", len(updates))
+			return updates, nil
+		} else {
+			fmt.Printf("Winget recovery failed: %v\n", err)
+		}
+
+		return nil, fmt.Errorf("winget encountered a known issue (exit code %s). This may be due to Windows Update service or system configuration. Automatic recovery was attempted but failed", getExitCode(lastErr))
 	}
 
 	return nil, lastErr
@@ -518,4 +527,136 @@ func (s *WingetScanner) GetInstalledPackages() ([]WingetPackage, error) {
 	}
 
 	return packages, nil
+}
+
+// attemptWingetRecovery tries to fix common winget issues automatically
+func (s *WingetScanner) attemptWingetRecovery() ([]client.UpdateReportItem, error) {
+	fmt.Printf("Starting winget recovery process...\n")
+
+	// Recovery Method 1: Reset winget sources (common fix)
+	fmt.Printf("Attempting to reset winget sources...\n")
+	if err := s.resetWingetSources(); err == nil {
+		if updates, scanErr := s.scanWithJSON(); scanErr == nil {
+			fmt.Printf("Recovery successful after source reset\n")
+			return updates, nil
+		}
+	}
+
+	// Recovery Method 2: Update winget itself (silent)
+	fmt.Printf("Attempting to update winget itself...\n")
+	if err := s.updateWingetSilent(); err == nil {
+		// Wait a moment for winget to stabilize
+		time.Sleep(2 * time.Second)
+		if updates, scanErr := s.scanWithJSON(); scanErr == nil {
+			fmt.Printf("Recovery successful after winget update\n")
+			return updates, nil
+		}
+	}
+
+	// Recovery Method 3: Repair Windows App Installer (winget backend)
+	fmt.Printf("Attempting to repair Windows App Installer...\n")
+	if err := s.repairWindowsAppInstaller(); err == nil {
+		// Wait longer for system repairs
+		time.Sleep(5 * time.Second)
+		if updates, scanErr := s.scanWithJSON(); scanErr == nil {
+			fmt.Printf("Recovery successful after Windows App Installer repair\n")
+			return updates, nil
+		}
+	}
+
+	// Recovery Method 4: Force refresh with admin privileges
+	fmt.Printf("Attempting admin refresh...\n")
+	if updates, err := s.scanWithAdminPrivileges(); err == nil {
+		fmt.Printf("Recovery successful with admin privileges\n")
+		return updates, nil
+	}
+
+	// If all recovery attempts failed, return the original error
+	return nil, fmt.Errorf("all winget recovery attempts failed")
+}
+
+// resetWingetSources resets winget package sources
+func (s *WingetScanner) resetWingetSources() error {
+	// Reset winget sources silently
+	cmd := exec.Command("winget", "source", "reset", "--force")
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("Failed to reset winget sources: %v\n", err)
+		return err
+	}
+
+	// Add default sources back
+	cmd = exec.Command("winget", "source", "add", "winget", "--accept-package-agreements", "--accept-source-agreements")
+	_, err = cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("Failed to add winget source: %v\n", err)
+		return err
+	}
+
+	return nil
+}
+
+// updateWingetSilent updates winget itself silently
+func (s *WingetScanner) updateWingetSilent() error {
+	// Update winget silently with no interaction
+	cmd := exec.Command("winget", "upgrade", "--id", "Microsoft.AppInstaller", "--silent", "--accept-package-agreements", "--accept-source-agreements")
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("Failed to update winget: %v\n", err)
+		return err
+	}
+	return nil
+}
+
+// repairWindowsAppInstaller attempts to repair the Windows App Installer
+func (s *WingetScanner) repairWindowsAppInstaller() error {
+	// Try to repair using PowerShell
+	psCmd := `Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" | Repair-AppxPackage -ForceUpdateFromAnyVersion`
+	cmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command", psCmd)
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("Failed to repair Windows App Installer: %v\n", err)
+		return err
+	}
+	return nil
+}
+
+// scanWithAdminPrivileges attempts to scan with elevated privileges if available
+func (s *WingetScanner) scanWithAdminPrivileges() ([]client.UpdateReportItem, error) {
+	// Try running with elevated privileges using PowerShell
+	psCmd := `Start-Process winget -ArgumentList "list","--outdated","--accept-source-agreements" -Verb RunAs -Wait`
+	cmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command", psCmd)
+
+	// This will likely fail without actual admin privileges, but we try anyway
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		// Fallback to regular scan with different flags
+		return s.scanWithDifferentFlags()
+	}
+
+	// If admin scan succeeded, try to get the results
+	return s.scanWithBasicOutput()
+}
+
+// scanWithDifferentFlags tries alternative winget flags
+func (s *WingetScanner) scanWithDifferentFlags() ([]client.UpdateReportItem, error) {
+	// Try different combination of flags
+	flagVariations := [][]string{
+		{"list", "--outdated", "--accept-source-agreements"},
+		{"list", "--outdated", "--include-unknown"},
+		{"list", "--outdated"},
+	}
+
+	for _, flags := range flagVariations {
+		cmd := exec.Command("winget", flags...)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			// Try to parse the output
+			if updates, parseErr := s.parseWingetTextOutput(string(output)); parseErr == nil {
+				return updates, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("all flag variations failed")
 }

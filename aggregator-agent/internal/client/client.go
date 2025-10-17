@@ -369,6 +369,52 @@ func (c *Client) ReportDependencies(agentID uuid.UUID, report DependencyReport) 
 	return nil
 }
 
+// SystemInfoReport represents system information updates
+type SystemInfoReport struct {
+	Timestamp  time.Time              `json:"timestamp"`
+	CPUModel    string                 `json:"cpu_model,omitempty"`
+	CPUCores    int                    `json:"cpu_cores,omitempty"`
+	CPUThreads  int                    `json:"cpu_threads,omitempty"`
+	MemoryTotal uint64                 `json:"memory_total,omitempty"`
+	DiskTotal   uint64                 `json:"disk_total,omitempty"`
+	DiskUsed    uint64                 `json:"disk_used,omitempty"`
+	IPAddress   string                 `json:"ip_address,omitempty"`
+	Processes   int                    `json:"processes,omitempty"`
+	Uptime      string                 `json:"uptime,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// ReportSystemInfo sends updated system information to the server
+func (c *Client) ReportSystemInfo(agentID uuid.UUID, report SystemInfoReport) error {
+	url := fmt.Sprintf("%s/api/v1/agents/%s/system-info", c.baseURL, agentID)
+
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Accept 200 OK or 404 Not Found (if endpoint doesn't exist yet)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to report system info: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	return nil
+}
+
 // DetectSystem returns basic system information (deprecated, use system.GetSystemInfo instead)
 func DetectSystem() (osType, osVersion, osArch string) {
 	osType = runtime.GOOS
