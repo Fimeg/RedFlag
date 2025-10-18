@@ -27,7 +27,7 @@ import { getStatusColor, formatRelativeTime, isOnline, formatBytes } from '@/lib
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import { AgentSystemUpdates } from '@/components/AgentUpdates';
-import HistoryTimeline from '@/components/HistoryTimeline';
+import ChatTimeline from '@/components/ChatTimeline';
 
 const Agents: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -631,7 +631,7 @@ const Agents: React.FC = () => {
               </div>
             ) : (
               <div>
-                <HistoryTimeline agentId={selectedAgent.id} />
+                <ChatTimeline agentId={selectedAgent.id} isScopedView={true} />
               </div>
             )}
           </div>

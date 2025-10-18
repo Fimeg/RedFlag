@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	AgentVersion = "0.1.5" // Command status synchronization, timeout fixes, DNF improvements
+	AgentVersion = "0.1.7" // Windows Update data enrichment: CVEs, MSRC severity, dates, version parsing
 )
 
 // getConfigPath returns the platform-specific config path

@@ -252,6 +252,29 @@ func (q *UpdateQueries) SetPendingDependencies(agentID uuid.UUID, packageType, p
 	return err
 }
 
+// SetInstallingWithNoDependencies records zero dependencies and transitions directly to installing
+// This function is used when a package has NO dependencies and can skip the pending_dependencies state
+func (q *UpdateQueries) SetInstallingWithNoDependencies(id uuid.UUID, dependencies []string) error {
+	depsJSON, err := json.Marshal(dependencies)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dependencies: %w", err)
+	}
+
+	query := `
+		UPDATE current_package_state
+		SET status = 'installing',
+		    metadata = jsonb_set(
+				jsonb_set(metadata, '{dependencies}', $2::jsonb),
+				'{dependencies_reported_at}',
+				to_jsonb(NOW())
+		    ),
+		    last_updated_at = NOW()
+		WHERE id = $1 AND status = 'checking_dependencies'
+	`
+	_, err = q.db.Exec(query, id, depsJSON)
+	return err
+}
+
 // CreateUpdateLog inserts an update log entry
 func (q *UpdateQueries) CreateUpdateLog(log *models.UpdateLog) error {
 	query := `
@@ -448,10 +471,16 @@ func (q *UpdateQueries) ListUpdatesFromState(filters *models.UpdateFilters) ([]m
 	}
 
 	if filters.Status != "" {
+		// Explicit status filter provided - use it
 		baseQuery += fmt.Sprintf(" AND status = $%d", argIdx)
 		countQuery += fmt.Sprintf(" AND status = $%d", argIdx)
 		args = append(args, filters.Status)
 		argIdx++
+	} else {
+		// No status filter - exclude 'updated' and 'ignored' packages by default
+		// These should only be visible in history or when explicitly filtered
+		baseQuery += " AND status NOT IN ('updated', 'ignored')"
+		countQuery += " AND status NOT IN ('updated', 'ignored')"
 	}
 
 	// Get total count
@@ -723,6 +752,142 @@ func (q *UpdateQueries) GetAllLogs(filters *models.LogFilters) ([]models.UpdateL
 	}
 
 	return logs, total, nil
+}
+
+// UnifiedHistoryItem represents a single item in unified history (can be a command or log)
+type UnifiedHistoryItem struct {
+	ID              uuid.UUID `json:"id" db:"id"`
+	AgentID         uuid.UUID `json:"agent_id" db:"agent_id"`
+	Type            string    `json:"type" db:"type"` // "command" or "log"
+	Action          string    `json:"action" db:"action"`
+	Status          string    `json:"status" db:"status"`
+	Result          string    `json:"result" db:"result"`
+	PackageName     string    `json:"package_name" db:"package_name"`
+	PackageType     string    `json:"package_type" db:"package_type"`
+	Stdout          string    `json:"stdout" db:"stdout"`
+	Stderr          string    `json:"stderr" db:"stderr"`
+	ExitCode        int       `json:"exit_code" db:"exit_code"`
+	DurationSeconds int       `json:"duration_seconds" db:"duration_seconds"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+	Hostname        string    `json:"hostname" db:"hostname"`
+}
+
+// GetAllUnifiedHistory retrieves both commands and logs as a unified history view
+func (q *UpdateQueries) GetAllUnifiedHistory(filters *models.LogFilters) ([]UnifiedHistoryItem, int, error) {
+	whereClause := []string{"1=1"}
+	args := []interface{}{}
+	argIdx := 1
+
+	// Add filters
+	if filters.AgentID != uuid.Nil {
+		whereClause = append(whereClause, fmt.Sprintf("agent_id = $%d", argIdx))
+		args = append(args, filters.AgentID)
+		argIdx++
+	}
+
+	if filters.Action != "" {
+		whereClause = append(whereClause, fmt.Sprintf("action = $%d", argIdx))
+		args = append(args, filters.Action)
+		argIdx++
+	}
+
+	if filters.Result != "" {
+		whereClause = append(whereClause, fmt.Sprintf("result = $%d", argIdx))
+		args = append(args, filters.Result)
+		argIdx++
+	}
+
+	if filters.Since != nil {
+		whereClause = append(whereClause, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, filters.Since)
+		argIdx++
+	}
+
+	// Build the unified query using UNION ALL
+	whereStr := strings.Join(whereClause, " AND ")
+
+	// Commands query
+	commandsQuery := fmt.Sprintf(`
+		SELECT
+			ac.id,
+			ac.agent_id,
+			'command' as type,
+			ac.command_type as action,
+			ac.status,
+			COALESCE(ac.result::text, '') as result,
+			COALESCE(ac.params->>'package_name', 'System Operation') as package_name,
+			COALESCE(ac.params->>'package_type', 'system') as package_type,
+			COALESCE(ac.result->>'stdout', '') as stdout,
+			COALESCE(ac.result->>'stderr', '') as stderr,
+			COALESCE((ac.result->>'exit_code')::int, 0) as exit_code,
+			COALESCE((ac.result->>'duration_seconds')::int, 0) as duration_seconds,
+			ac.created_at,
+			COALESCE(a.hostname, '') as hostname
+		FROM agent_commands ac
+		LEFT JOIN agents a ON ac.agent_id = a.id
+		WHERE %s
+	`, whereStr)
+
+	// Logs query
+	logsQuery := fmt.Sprintf(`
+		SELECT
+			ul.id,
+			ul.agent_id,
+			'log' as type,
+			ul.action,
+			'' as status,
+			ul.result,
+			'' as package_name,
+			'' as package_type,
+			ul.stdout,
+			ul.stderr,
+			ul.exit_code,
+			ul.duration_seconds,
+			ul.executed_at as created_at,
+			COALESCE(a.hostname, '') as hostname
+		FROM update_logs ul
+		LEFT JOIN agents a ON ul.agent_id = a.id
+		WHERE %s
+	`, whereStr)
+
+	// Combined query
+	unifiedQuery := fmt.Sprintf(`
+		%s
+		UNION ALL
+		%s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, commandsQuery, logsQuery, argIdx, argIdx+1)
+
+	// Get total count (combined count of both tables)
+	countCommandsQuery := fmt.Sprintf("SELECT COUNT(*) FROM agent_commands WHERE %s", whereStr)
+	countLogsQuery := fmt.Sprintf("SELECT COUNT(*) FROM update_logs WHERE %s", whereStr)
+
+	var totalCommands, totalLogs int
+	q.db.Get(&totalCommands, countCommandsQuery, args...)
+	q.db.Get(&totalLogs, countLogsQuery, args...)
+	total := totalCommands + totalLogs
+
+	// Add pagination parameters
+	limit := filters.PageSize
+	if limit == 0 {
+		limit = 100 // Default limit
+	}
+	offset := (filters.Page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+
+	args = append(args, limit, offset)
+
+	// Execute query
+	var items []UnifiedHistoryItem
+	err := q.db.Select(&items, unifiedQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get unified history: %w", err)
+	}
+
+	return items, total, nil
 }
 
 // GetActiveOperations returns currently running operations

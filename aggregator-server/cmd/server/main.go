@@ -89,6 +89,7 @@ func main() {
 			agents.POST("/:id/updates", updateHandler.ReportUpdates)
 			agents.POST("/:id/logs", updateHandler.ReportLog)
 			agents.POST("/:id/dependencies", updateHandler.ReportDependencies)
+			agents.POST("/:id/system-info", agentHandler.ReportSystemInfo)
 		}
 
 		// Dashboard/Web routes (protected by web auth)

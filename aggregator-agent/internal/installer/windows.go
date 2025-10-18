@@ -54,9 +54,17 @@ func (i *WindowsUpdateInstaller) installUpdates(packageNames []string, isDryRun 
 	}
 
 	startTime := time.Now()
+
+	// Determine action type
+	action := "install"
+	if packageNames == nil {
+		action = "upgrade" // Upgrade all updates
+	}
+
 	result := &InstallResult{
 		Success:          false,
 		IsDryRun:         isDryRun,
+		Action:           action,
 		DurationSeconds:  0,
 		PackagesInstalled: []string{},
 		Dependencies:     []string{},

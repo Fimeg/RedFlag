@@ -57,10 +57,15 @@ A self-hosted, cross-platform update management platform built with:
 | ![Main Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png) | ![Updates Dashboard](Screenshots/RedFlag%20Updates%20Dashboard.png) | ![Agent List](Screenshots/RedFlag%20Agent%20List.png) |
 | System overview with metrics | Update approval with dependency workflow | Cross-platform agent management |
 
-| Linux Agent Details | Windows Agent Details | History & Audit |
-|-------------------|---------------------|----------------|
-| ![Linux Agent Details](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Windows Agent Details](Screenshots/RedFlag%20Windows%20Agent%20Details.png) | ![History Dashboard](Screenshots/RedFlag%20History%20Dashboard.png) |
-| Linux system specs and updates | Windows Updates and Winget support | Complete audit trail of activities |
+| Linux Agent Details | Windows Agent Details |
+|-------------------|---------------------|
+| ![Linux Agent Details](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Windows Agent Details](Screenshots/RedFlag%20Windows%20Agent%20Details.png) |
+| Linux system specs and updates | Windows Updates and Winget support |
+
+| History & Audit | Windows Agent History |
+|----------------|----------------------|
+| ![History Dashboard](Screenshots/RedFlag%20History%20Dashboard.png) | ![Windows Agent History](Screenshots/RedFlag%20Windows%20Agent%20History%20.png) |
+| Complete audit trail of activities | Windows agent activity timeline |
 
 | Live Operations | Docker Management |
 |-----------------|------------------|
