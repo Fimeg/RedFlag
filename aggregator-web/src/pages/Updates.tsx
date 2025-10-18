@@ -12,10 +12,12 @@ import {
   ChevronRight,
   AlertTriangle,
   Clock,
-  Calendar,
   X,
   Loader2,
   RotateCcw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { useUpdates, useUpdate, useApproveUpdate, useRejectUpdate, useInstallUpdate, useApproveMultipleUpdates, useRetryCommand, useCancelCommand } from '@/hooks/useUpdates';
 import { useRecentCommands } from '@/hooks/useCommands';
@@ -38,6 +40,8 @@ const Updates: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState(searchParams.get('severity') || '');
   const [typeFilter, setTypeFilter] = useState(searchParams.get('type') || '');
   const [agentFilter, setAgentFilter] = useState(searchParams.get('agent') || '');
+  const [sortBy, setSortBy] = useState(searchParams.get('sort_by') || '');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(searchParams.get('sort_order') as 'asc' | 'desc' || 'desc');
 
   // Debounce search query to avoid API calls on every keystroke
   useEffect(() => {
@@ -70,6 +74,8 @@ const Updates: React.FC = () => {
     if (severityFilter) params.set('severity', severityFilter);
     if (typeFilter) params.set('type', typeFilter);
     if (agentFilter) params.set('agent', agentFilter);
+    if (sortBy) params.set('sort_by', sortBy);
+    if (sortOrder) params.set('sort_order', sortOrder);
     if (currentPage > 1) params.set('page', currentPage.toString());
     if (pageSize !== 100) params.set('page_size', pageSize.toString());
 
@@ -77,7 +83,7 @@ const Updates: React.FC = () => {
     if (newUrl !== window.location.href) {
       window.history.replaceState({}, '', newUrl);
     }
-  }, [debouncedSearchQuery, statusFilter, severityFilter, typeFilter, agentFilter, currentPage, pageSize]);
+  }, [debouncedSearchQuery, statusFilter, severityFilter, typeFilter, agentFilter, sortBy, sortOrder, currentPage, pageSize]);
 
   // Fetch updates list
   const { data: updatesData, isPending, error } = useUpdates({
@@ -86,6 +92,8 @@ const Updates: React.FC = () => {
     severity: severityFilter || undefined,
     type: typeFilter || undefined,
     agent: agentFilter || undefined,
+    sort_by: sortBy || undefined,
+    sort_order: sortOrder || undefined,
     page: currentPage,
     page_size: pageSize,
   });
@@ -262,6 +270,22 @@ const Updates: React.FC = () => {
         setStatusFilter('approved');
         setSeverityFilter('');
         break;
+      case 'installing':
+        setStatusFilter('installing');
+        setSeverityFilter('');
+        break;
+      case 'installed':
+        setStatusFilter('installed');
+        setSeverityFilter('');
+        break;
+      case 'failed':
+        setStatusFilter('failed');
+        setSeverityFilter('');
+        break;
+      case 'dependencies':
+        setStatusFilter('pending_dependencies');
+        setSeverityFilter('');
+        break;
       default:
         // Clear all filters
         setStatusFilter('');
@@ -273,34 +297,31 @@ const Updates: React.FC = () => {
     setCurrentPage(1);
   };
 
-  // Group updates
-  const groupUpdates = (updates: UpdatePackage[], groupBy: string) => {
-    const groups: Record<string, UpdatePackage[]> = {};
-
-    updates.forEach(update => {
-      let key: string;
-      switch (groupBy) {
-        case 'severity':
-          key = update.severity;
-          break;
-        case 'type':
-          key = update.package_type;
-          break;
-        case 'status':
-          key = update.status;
-          break;
-        default:
-          key = 'all';
-      }
-
-      if (!groups[key]) {
-        groups[key] = [];
-      }
-      groups[key].push(update);
-    });
-
-    return groups;
+  // Handle column sorting
+  const handleSort = (column: string) => {
+    if (sortBy === column) {
+      // Toggle sort order if clicking the same column
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Set new column with default desc order
+      setSortBy(column);
+      setSortOrder('desc');
+    }
+    setCurrentPage(1);
   };
+
+  // Render sort icon for column headers
+  const renderSortIcon = (column: string) => {
+    if (sortBy !== column) {
+      return <ArrowUpDown className="h-4 w-4 ml-1 text-gray-400" />;
+    }
+    return sortOrder === 'asc' ? (
+      <ArrowUp className="h-4 w-4 ml-1 text-primary-600" />
+    ) : (
+      <ArrowDown className="h-4 w-4 ml-1 text-primary-600" />
+    );
+  };
+
 
   // Get total statistics from API (not just current page)
   const totalStats = {
@@ -890,8 +911,9 @@ const Updates: React.FC = () => {
           </div>
         </div>
 
-        {/* Statistics Cards - Show total counts across all updates */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+        {/* Statistics Cards - Compact design with combined visual boxes */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          {/* Total Updates - Standalone */}
           <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
@@ -902,43 +924,51 @@ const Updates: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-lg border border-orange-200 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Pending</p>
-                <p className="text-2xl font-bold text-orange-600">{totalStats.pending}</p>
+          {/* Approved / Pending - Combined with divider */}
+          <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between divide-x divide-gray-200">
+              <div className="flex-1 pr-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-gray-600">Approved</p>
+                    <p className="text-xl font-bold text-green-600">{totalStats.approved}</p>
+                  </div>
+                  <CheckCircle className="h-6 w-6 text-green-400" />
+                </div>
               </div>
-              <Clock className="h-8 w-8 text-orange-400" />
+              <div className="flex-1 pl-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-gray-600">Pending</p>
+                    <p className="text-xl font-bold text-orange-600">{totalStats.pending}</p>
+                  </div>
+                  <Clock className="h-6 w-6 text-orange-400" />
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-lg border border-green-200 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Approved</p>
-                <p className="text-2xl font-bold text-green-600">{totalStats.approved}</p>
+          {/* Critical / High Priority - Combined with divider */}
+          <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between divide-x divide-gray-200">
+              <div className="flex-1 pr-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-gray-600">Critical</p>
+                    <p className="text-xl font-bold text-red-600">{totalStats.critical}</p>
+                  </div>
+                  <AlertTriangle className="h-6 w-6 text-red-400" />
+                </div>
               </div>
-              <CheckCircle className="h-8 w-8 text-green-400" />
-            </div>
-          </div>
-
-          <div className="bg-white p-4 rounded-lg border border-red-200 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Critical</p>
-                <p className="text-2xl font-bold text-red-600">{totalStats.critical}</p>
+              <div className="flex-1 pl-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-gray-600">High Priority</p>
+                    <p className="text-xl font-bold text-yellow-600">{totalStats.high}</p>
+                  </div>
+                  <AlertTriangle className="h-6 w-6 text-yellow-400" />
+                </div>
               </div>
-              <AlertTriangle className="h-8 w-8 text-red-400" />
-            </div>
-          </div>
-
-          <div className="bg-white p-4 rounded-lg border border-yellow-200 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">High Priority</p>
-                <p className="text-2xl font-bold text-yellow-600">{totalStats.high}</p>
-              </div>
-              <AlertTriangle className="h-8 w-8 text-yellow-400" />
             </div>
           </div>
         </div>
@@ -991,6 +1021,54 @@ const Updates: React.FC = () => {
           >
             <CheckCircle className="h-4 w-4 mr-1 inline" />
             Approved
+          </button>
+          <button
+            onClick={() => handleQuickFilter('installing')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'installing'
+                ? "bg-blue-100 border-blue-300 text-blue-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <Loader2 className="h-4 w-4 mr-1 inline" />
+            Installing
+          </button>
+          <button
+            onClick={() => handleQuickFilter('installed')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'installed'
+                ? "bg-emerald-100 border-emerald-300 text-emerald-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <CheckCircle className="h-4 w-4 mr-1 inline" />
+            Installed
+          </button>
+          <button
+            onClick={() => handleQuickFilter('failed')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'failed'
+                ? "bg-red-100 border-red-300 text-red-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <XCircle className="h-4 w-4 mr-1 inline" />
+            Failed
+          </button>
+          <button
+            onClick={() => handleQuickFilter('dependencies')}
+            className={cn(
+              "px-4 py-2 text-sm font-medium rounded-lg border transition-colors",
+              statusFilter === 'pending_dependencies'
+                ? "bg-amber-100 border-amber-300 text-amber-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            )}
+          >
+            <AlertTriangle className="h-4 w-4 mr-1 inline" />
+            Dependencies
           </button>
         </div>
       </div>
@@ -1161,13 +1239,69 @@ const Updates: React.FC = () => {
                       className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                     />
                   </th>
-                  <th className="table-header">Package</th>
-                  <th className="table-header">Type</th>
-                  <th className="table-header">Versions</th>
-                  <th className="table-header">Severity</th>
-                  <th className="table-header">Status</th>
-                  <th className="table-header">Agent</th>
-                  <th className="table-header">Discovered</th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('package_name')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Package
+                      {renderSortIcon('package_name')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('package_type')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Type
+                      {renderSortIcon('package_type')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('available_version')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Versions
+                      {renderSortIcon('available_version')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('severity')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Severity
+                      {renderSortIcon('severity')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('status')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Status
+                      {renderSortIcon('status')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('agent_id')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Agent
+                      {renderSortIcon('agent_id')}
+                    </button>
+                  </th>
+                  <th className="table-header">
+                    <button
+                      onClick={() => handleSort('created_at')}
+                      className="flex items-center hover:text-primary-600 font-medium"
+                    >
+                      Discovered
+                      {renderSortIcon('created_at')}
+                    </button>
+                  </th>
                   <th className="table-header">Actions</th>
                 </tr>
               </thead>
@@ -1185,11 +1319,12 @@ const Updates: React.FC = () => {
                     <td className="table-cell">
                       <div className="flex items-center space-x-3">
                         <span className="text-xl">{getPackageTypeIcon(update.package_type)}</span>
-                        <div>
+                        <div className="min-w-0 flex-1">
                           <div className="text-sm font-medium text-gray-900">
                             <button
                               onClick={() => navigate(`/updates/${update.id}`)}
-                              className="hover:text-primary-600"
+                              className="hover:text-primary-600 truncate block max-w-xs"
+                              title={update.package_name}
                             >
                               {update.package_name}
                             </button>

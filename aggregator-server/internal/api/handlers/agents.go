@@ -454,3 +454,90 @@ func (h *AgentHandler) UnregisterAgent(c *gin.Context) {
 		"hostname": agent.Hostname,
 	})
 }
+
+// ReportSystemInfo handles system information updates from agents
+func (h *AgentHandler) ReportSystemInfo(c *gin.Context) {
+	agentID := c.MustGet("agent_id").(uuid.UUID)
+
+	var req struct {
+		Timestamp  time.Time              `json:"timestamp"`
+		CPUModel    string                 `json:"cpu_model,omitempty"`
+		CPUCores    int                    `json:"cpu_cores,omitempty"`
+		CPUThreads  int                    `json:"cpu_threads,omitempty"`
+		MemoryTotal uint64                 `json:"memory_total,omitempty"`
+		DiskTotal   uint64                 `json:"disk_total,omitempty"`
+		DiskUsed    uint64                 `json:"disk_used,omitempty"`
+		IPAddress   string                 `json:"ip_address,omitempty"`
+		Processes   int                    `json:"processes,omitempty"`
+		Uptime      string                 `json:"uptime,omitempty"`
+		Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get current agent to preserve existing metadata
+	agent, err := h.agentQueries.GetAgentByID(agentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Update agent metadata with system information
+	if agent.Metadata == nil {
+		agent.Metadata = models.JSONB{}
+	}
+
+	// Store system specs in metadata
+	if req.CPUModel != "" {
+		agent.Metadata["cpu_model"] = req.CPUModel
+	}
+	if req.CPUCores > 0 {
+		agent.Metadata["cpu_cores"] = req.CPUCores
+	}
+	if req.CPUThreads > 0 {
+		agent.Metadata["cpu_threads"] = req.CPUThreads
+	}
+	if req.MemoryTotal > 0 {
+		agent.Metadata["memory_total"] = req.MemoryTotal
+	}
+	if req.DiskTotal > 0 {
+		agent.Metadata["disk_total"] = req.DiskTotal
+	}
+	if req.DiskUsed > 0 {
+		agent.Metadata["disk_used"] = req.DiskUsed
+	}
+	if req.IPAddress != "" {
+		agent.Metadata["ip_address"] = req.IPAddress
+	}
+	if req.Processes > 0 {
+		agent.Metadata["processes"] = req.Processes
+	}
+	if req.Uptime != "" {
+		agent.Metadata["uptime"] = req.Uptime
+	}
+
+	// Store the timestamp when system info was last updated
+	agent.Metadata["system_info_updated_at"] = time.Now().Format(time.RFC3339)
+
+	// Merge any additional metadata
+	if req.Metadata != nil {
+		for k, v := range req.Metadata {
+			agent.Metadata[k] = v
+		}
+	}
+
+	// Update agent with new metadata
+	if err := h.agentQueries.UpdateAgent(agent); err != nil {
+		log.Printf("Warning: Failed to update agent system info: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update system info"})
+		return
+	}
+
+	log.Printf("✅ System info updated for agent %s (%s): CPU=%s, Cores=%d, Memory=%dMB",
+		agent.Hostname, agentID, req.CPUModel, req.CPUCores, req.MemoryTotal/1024/1024)
+
+	c.JSON(http.StatusOK, gin.H{"message": "system info updated successfully"})
+}

@@ -463,12 +463,6 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 			return
 		}
 
-		// Record that dependencies were checked (empty array) in metadata
-		if err := h.updateQueries.SetPendingDependencies(agentID, req.PackageType, req.PackageName, req.Dependencies); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package metadata"})
-			return
-		}
-
 		// Automatically create installation command since no dependencies need approval
 		command := &models.AgentCommand{
 			ID:          uuid.New(),
@@ -489,8 +483,8 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 			return
 		}
 
-		// Update status to installing since no approval needed
-		if err := h.updateQueries.InstallUpdate(update.ID); err != nil {
+		// Record that dependencies were checked (empty array) and transition directly to installing
+		if err := h.updateQueries.SetInstallingWithNoDependencies(update.ID, req.Dependencies); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package status to installing"})
 			return
 		}
@@ -561,6 +555,7 @@ func (h *UpdateHandler) ConfirmDependencies(c *gin.Context) {
 }
 
 // GetAllLogs retrieves logs across all agents with filtering for universal log view
+// Now returns unified history of both commands and logs
 func (h *UpdateHandler) GetAllLogs(c *gin.Context) {
 	filters := &models.LogFilters{
 		Action:  c.Query("action"),
@@ -589,14 +584,15 @@ func (h *UpdateHandler) GetAllLogs(c *gin.Context) {
 	filters.Page = page
 	filters.PageSize = pageSize
 
-	logs, total, err := h.updateQueries.GetAllLogs(filters)
+	// Get unified history (both commands and logs)
+	items, total, err := h.updateQueries.GetAllUnifiedHistory(filters)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve logs"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve history"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"logs":      logs,
+		"logs":      items, // Changed from "logs" to unified items for backwards compatibility
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,

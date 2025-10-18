@@ -95,8 +95,14 @@ func (s *WindowsUpdateScannerWUA) convertWUAUpdate(update *windowsupdate.IUpdate
 	kbArticles := s.getKBArticles(update)
 	updateIdentity := update.Identity
 
-	// Determine severity from categories
-	severity := s.determineSeverityFromCategories(update)
+	// Use MSRC severity if available (more accurate than category-based detection)
+	severity := s.mapMsrcSeverity(update.MsrcSeverity)
+	if severity == "" {
+		severity = s.determineSeverityFromCategories(update)
+	}
+
+	// Get version information with improved parsing
+	currentVersion, availableVersion := s.parseVersionFromTitle(title)
 
 	// Get version information
 	maxDownloadSize := update.MaxDownloadSize
@@ -116,6 +122,63 @@ func (s *WindowsUpdateScannerWUA) convertWUAUpdate(update *windowsupdate.IUpdate
 		"scan_timestamp":  time.Now().Format(time.RFC3339),
 	}
 
+	// Add MSRC severity if available
+	if update.MsrcSeverity != "" {
+		metadata["msrc_severity"] = update.MsrcSeverity
+	}
+
+	// Add security bulletin IDs (includes CVEs)
+	if len(update.SecurityBulletinIDs) > 0 {
+		metadata["security_bulletins"] = update.SecurityBulletinIDs
+		// Extract CVEs from security bulletins
+		cveList := make([]string, 0)
+		for _, bulletin := range update.SecurityBulletinIDs {
+			if strings.HasPrefix(bulletin, "CVE-") {
+				cveList = append(cveList, bulletin)
+			}
+		}
+		if len(cveList) > 0 {
+			metadata["cve_list"] = cveList
+		}
+	}
+
+	// Add deployment information
+	if update.LastDeploymentChangeTime != nil {
+		metadata["last_deployment_change"] = update.LastDeploymentChangeTime.Format(time.RFC3339)
+		metadata["discovered_at"] = update.LastDeploymentChangeTime.Format(time.RFC3339)
+	}
+
+	// Add deadline if present
+	if update.Deadline != nil {
+		metadata["deadline"] = update.Deadline.Format(time.RFC3339)
+	}
+
+	// Add flags
+	if update.IsMandatory {
+		metadata["is_mandatory"] = true
+	}
+	if update.IsBeta {
+		metadata["is_beta"] = true
+	}
+	if update.IsDownloaded {
+		metadata["is_downloaded"] = true
+	}
+
+	// Add more info URLs
+	if len(update.MoreInfoUrls) > 0 {
+		metadata["more_info_urls"] = update.MoreInfoUrls
+	}
+
+	// Add release notes
+	if update.ReleaseNotes != "" {
+		metadata["release_notes"] = update.ReleaseNotes
+	}
+
+	// Add support URL
+	if update.SupportUrl != "" {
+		metadata["support_url"] = update.SupportUrl
+	}
+
 	// Add categories if available
 	categories := s.getCategories(update)
 	if len(categories) > 0 {
@@ -126,11 +189,16 @@ func (s *WindowsUpdateScannerWUA) convertWUAUpdate(update *windowsupdate.IUpdate
 		PackageType:        "windows_update",
 		PackageName:        title,
 		PackageDescription: description,
-		CurrentVersion:     "Not Installed",
-		AvailableVersion:   s.getVersionInfo(update),
+		CurrentVersion:     currentVersion,
+		AvailableVersion:   availableVersion,
 		Severity:           severity,
 		RepositorySource:   "Microsoft Update",
 		Metadata:           metadata,
+	}
+
+	// Add KB articles to CVE list field if present
+	if len(kbArticles) > 0 {
+		updateItem.KBID = strings.Join(kbArticles, ", ")
 	}
 
 	// Add size information to description if available
@@ -271,54 +339,6 @@ func (s *WindowsUpdateScannerWUA) categorizeUpdate(title string, categories []st
 	return "system"
 }
 
-// getVersionInfo extracts version information from update
-func (s *WindowsUpdateScannerWUA) getVersionInfo(update *windowsupdate.IUpdate) string {
-	// Try to get version from title or description
-	title := update.Title
-	description := update.Description
-
-	// Look for version patterns
-	title = s.extractVersionFromText(title)
-	if title != "" {
-		return title
-	}
-
-	return s.extractVersionFromText(description)
-}
-
-// extractVersionFromText extracts version information from text
-func (s *WindowsUpdateScannerWUA) extractVersionFromText(text string) string {
-	// Common version patterns to look for
-	patterns := []string{
-		`\b\d+\.\d+\.\d+\b`,           // x.y.z
-		`\b\d+\.\d+\b`,               // x.y
-		`\bKB\d+\b`,                  // KB numbers
-		`\b\d{8}\b`,                 // 8-digit Windows build numbers
-	}
-
-	for _, pattern := range patterns {
-		// This is a simplified version - in production you'd use regex
-		if strings.Contains(text, pattern) {
-			// For now, return a simplified extraction
-			if strings.Contains(text, "KB") {
-				return s.extractKBNumber(text)
-			}
-		}
-	}
-
-	return "Unknown"
-}
-
-// extractKBNumber extracts KB numbers from text
-func (s *WindowsUpdateScannerWUA) extractKBNumber(text string) string {
-	words := strings.Fields(text)
-	for _, word := range words {
-		if strings.HasPrefix(word, "KB") && len(word) > 2 {
-			return word
-		}
-	}
-	return ""
-}
 
 // getEstimatedSize gets the estimated size of the update
 func (s *WindowsUpdateScannerWUA) getEstimatedSize(update *windowsupdate.IUpdate) uint64 {
@@ -438,4 +458,96 @@ func (s *WindowsUpdateScannerWUA) determineSeverityFromHistoryEntry(entry *windo
 	}
 
 	return "moderate"
+}
+
+// mapMsrcSeverity maps Microsoft's MSRC severity ratings to our severity levels
+func (s *WindowsUpdateScannerWUA) mapMsrcSeverity(msrcSeverity string) string {
+	switch strings.ToLower(strings.TrimSpace(msrcSeverity)) {
+	case "critical":
+		return "critical"
+	case "important":
+		return "critical"
+	case "moderate":
+		return "moderate"
+	case "low":
+		return "low"
+	case "unspecified", "":
+		return ""
+	default:
+		return ""
+	}
+}
+
+// parseVersionFromTitle attempts to extract current and available version from update title
+// Examples:
+//   "Intel Corporation - Display - 26.20.100.7584" -> ("Unknown", "26.20.100.7584")
+//   "2024-01 Cumulative Update for Windows 11 Version 22H2 (KB5034123)" -> ("Unknown", "KB5034123")
+func (s *WindowsUpdateScannerWUA) parseVersionFromTitle(title string) (currentVersion, availableVersion string) {
+	currentVersion = "Unknown"
+	availableVersion = "Unknown"
+
+	// Pattern 1: Version at the end after last dash (common for drivers)
+	// Example: "Intel Corporation - Display - 26.20.100.7584"
+	if strings.Contains(title, " - ") {
+		parts := strings.Split(title, " - ")
+		lastPart := strings.TrimSpace(parts[len(parts)-1])
+
+		// Check if last part looks like a version (contains dots and digits)
+		if strings.Contains(lastPart, ".") && s.containsDigits(lastPart) {
+			availableVersion = lastPart
+			return
+		}
+	}
+
+	// Pattern 2: KB article in parentheses
+	// Example: "2024-01 Cumulative Update (KB5034123)"
+	if strings.Contains(title, "(KB") && strings.Contains(title, ")") {
+		start := strings.Index(title, "(KB")
+		end := strings.Index(title[start:], ")")
+		if end > 0 {
+			kbNumber := title[start+1 : start+end]
+			availableVersion = kbNumber
+			return
+		}
+	}
+
+	// Pattern 3: Date-based versioning
+	// Example: "2024-01 Security Update"
+	if strings.Contains(title, "202") { // Year pattern
+		words := strings.Fields(title)
+		for _, word := range words {
+			// Look for YYYY-MM pattern
+			if len(word) == 7 && word[4] == '-' && s.containsDigits(word[:4]) && s.containsDigits(word[5:]) {
+				availableVersion = word
+				return
+			}
+		}
+	}
+
+	// Pattern 4: Version keyword followed by number
+	// Example: "Feature Update to Windows 11, version 23H2"
+	lowerTitle := strings.ToLower(title)
+	if strings.Contains(lowerTitle, "version ") {
+		idx := strings.Index(lowerTitle, "version ")
+		afterVersion := title[idx+8:]
+		words := strings.Fields(afterVersion)
+		if len(words) > 0 {
+			// Take the first word after "version"
+			versionStr := strings.TrimRight(words[0], ",.")
+			availableVersion = versionStr
+			return
+		}
+	}
+
+	return
+}
+
+// containsDigits checks if a string contains any digits
+func (s *WindowsUpdateScannerWUA) containsDigits(str string) bool {
+	for _, char := range str {
+		if char >= '0' && char <= '9' {
+			return true
+		}
+	}
+	return false
 }

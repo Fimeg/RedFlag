@@ -46,7 +46,7 @@ export interface UpdatePackage {
   current_version: string;
   available_version: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
-  status: 'pending' | 'approved' | 'scheduled' | 'installing' | 'installed' | 'failed';
+  status: 'pending' | 'approved' | 'scheduled' | 'installing' | 'installed' | 'failed' | 'checking_dependencies' | 'pending_dependencies';
   created_at: string;
   updated_at: string;
   approved_at: string | null;
@@ -248,6 +248,7 @@ export interface ScanRequest {
 // Query parameters
 export interface ListQueryParams {
   page?: number;
+  page_size?: number;
   limit?: number;
   status?: string;
   severity?: string;
