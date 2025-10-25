@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	AgentVersion = "0.1.7" // Windows Update data enrichment: CVEs, MSRC severity, dates, version parsing
+	AgentVersion = "0.1.8" // Added dnf makecache to security allowlist, retry tracking
 )
 
 // getConfigPath returns the platform-specific config path
