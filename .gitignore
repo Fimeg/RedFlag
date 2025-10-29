@@ -236,8 +236,10 @@ Thumbs.db
 # Compiled binaries (project-specific)
 redflag-agent
 redflag-server
+redflag-agent.exe
 aggregator-agent/redflag-agent
 aggregator-agent/aggregator-agent
+aggregator-agent/redflag-agent.exe
 aggregator-server/redflag-server
 aggregator-server/server
 
