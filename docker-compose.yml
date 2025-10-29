@@ -42,6 +42,17 @@ services:
     command: ["./redflag-server"]
     restart: unless-stopped
 
+  web:
+    build:
+      context: ./aggregator-web
+      dockerfile: Dockerfile
+    container_name: redflag-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   server-data:
