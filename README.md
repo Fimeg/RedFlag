@@ -70,6 +70,12 @@ A self-hosted, cross-platform update management platform built for homelabs and 
 └──────┘  └───────┘  └──────┘
 ```
 
+## Prerequisites
+
+- **Go 1.21+** (for building from source)
+- **Docker & Docker Compose** (for PostgreSQL database)
+- **Linux** (server deployment platform)
+
 ## Quick Start
 
 ### 1. Server Setup (Linux)
