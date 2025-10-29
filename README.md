@@ -87,19 +87,13 @@ cd RedFlag
 # Build agent (one-time)
 cd aggregator-agent && go mod tidy && go build -o redflag-agent cmd/agent/main.go && cd ..
 
-# Start database and server
+# Start database and server (auto-configures on first run)
 docker-compose up -d
 
-# Setup server (one-time)
-docker-compose exec server ./redflag-server --setup
+# Watch setup progress (optional)
+docker-compose logs -f server
 
-# Run database migrations
-docker-compose exec server ./redflag-server --migrate
-
-# Restart server with configuration
-docker-compose restart server
-
-# Access: http://localhost:8080
+# When setup is complete, access: http://localhost:8080
 # Admin: http://localhost:8080/admin
 ```
 
