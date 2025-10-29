@@ -84,6 +84,9 @@ A self-hosted, cross-platform update management platform built for homelabs and 
 git clone https://github.com/Fimeg/RedFlag.git
 cd RedFlag
 
+# Build agent (one-time)
+cd aggregator-agent && go mod tidy && go build -o redflag-agent cmd/agent/main.go && cd ..
+
 # Start database and server
 docker-compose up -d
 

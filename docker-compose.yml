@@ -24,6 +24,8 @@ services:
       context: ./aggregator-server
       dockerfile: Dockerfile
     container_name: redflag-server
+    volumes:
+      - ./aggregator-agent/redflag-agent:/app/redflag-agent:ro
     depends_on:
       postgres:
         condition: service_healthy
