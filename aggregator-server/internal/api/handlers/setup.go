@@ -291,13 +291,15 @@ LATEST_AGENT_VERSION=0.1.16`,
 	// Write configuration to persistent location
 	configDir := "/app/config"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create config directory"})
+		fmt.Printf("Failed to create config directory: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create config directory: %v", err)})
 		return
 	}
 
 	envPath := filepath.Join(configDir, ".env")
 	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save configuration"})
+		fmt.Printf("Failed to save configuration: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save configuration: %v", err)})
 		return
 	}
 
