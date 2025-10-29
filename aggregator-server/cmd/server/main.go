@@ -142,7 +142,6 @@ func main() {
 	registrationTokenHandler := handlers.NewRegistrationTokenHandler(registrationTokenQueries, agentQueries, cfg)
 	rateLimitHandler := handlers.NewRateLimitHandler(rateLimiter)
 	downloadHandler := handlers.NewDownloadHandler(filepath.Join(".", "redflag-agent"))
-	setupHandler := handlers.NewSetupHandler("/app/config")
 
 	// Setup router
 	router := gin.Default()

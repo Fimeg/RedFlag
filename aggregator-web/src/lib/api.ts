@@ -255,6 +255,40 @@ export const authApi = {
   },
 };
 
+// Setup API for server configuration (uses base API without auth)
+const setupApiInstance = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+export const setupApi = {
+  // Check server health and status
+  checkHealth: async (): Promise<{ status: string }> => {
+    const response = await setupApiInstance.get('/health');
+    return response.data;
+  },
+
+  // Submit server configuration
+  configure: async (config: {
+    adminUser: string;
+    adminPassword: string;
+    dbHost: string;
+    dbPort: string;
+    dbName: string;
+    dbUser: string;
+    dbPassword: string;
+    serverHost: string;
+    serverPort: string;
+    maxSeats: string;
+  }): Promise<{ message: string; configPath?: string; restart?: boolean }> => {
+    const response = await setupApiInstance.post('/setup', config);
+    return response.data;
+  },
+};
+
 // Utility functions
 export const createQueryString = (params: Record<string, any>): string => {
   const searchParams = new URLSearchParams();

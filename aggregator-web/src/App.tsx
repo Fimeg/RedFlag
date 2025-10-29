@@ -13,6 +13,8 @@ import Settings from '@/pages/Settings';
 import TokenManagement from '@/pages/TokenManagement';
 import RateLimiting from '@/pages/RateLimiting';
 import Login from '@/pages/Login';
+import Setup from '@/pages/Setup';
+import { WelcomeChecker } from '@/components/WelcomeChecker';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -75,8 +77,11 @@ const App: React.FC = () => {
       />
 
   
-      {/* App routes */}
+          {/* App routes */}
       <Routes>
+        {/* Setup route - shown when server needs configuration */}
+        <Route path="/setup" element={<Setup />} />
+
         {/* Login route */}
         <Route
           path="/login"
@@ -87,25 +92,27 @@ const App: React.FC = () => {
         <Route
           path="/*"
           element={
-            <ProtectedRoute>
-              <Layout>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/dashboard" element={<Dashboard />} />
-                  <Route path="/agents" element={<Agents />} />
-                  <Route path="/agents/:id" element={<Agents />} />
-                  <Route path="/updates" element={<Updates />} />
-                  <Route path="/updates/:id" element={<Updates />} />
-                  <Route path="/docker" element={<Docker />} />
-                  <Route path="/live" element={<LiveOperations />} />
-                  <Route path="/history" element={<History />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/settings/tokens" element={<TokenManagement />} />
-                  <Route path="/settings/rate-limiting" element={<RateLimiting />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </Layout>
-            </ProtectedRoute>
+            <WelcomeChecker>
+              <ProtectedRoute>
+                <Layout>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/agents" element={<Agents />} />
+                    <Route path="/agents/:id" element={<Agents />} />
+                    <Route path="/updates" element={<Updates />} />
+                    <Route path="/updates/:id" element={<Updates />} />
+                    <Route path="/docker" element={<Docker />} />
+                    <Route path="/live" element={<LiveOperations />} />
+                    <Route path="/history" element={<History />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/settings/tokens" element={<TokenManagement />} />
+                    <Route path="/settings/rate-limiting" element={<RateLimiting />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Layout>
+              </ProtectedRoute>
+            </WelcomeChecker>
           }
         />
       </Routes>

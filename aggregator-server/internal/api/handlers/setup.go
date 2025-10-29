@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"time"
 
-	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -300,9 +301,38 @@ LATEST_AGENT_VERSION=0.1.16`,
 		return
 	}
 
+	// Trigger graceful server restart after configuration
+	go func() {
+		time.Sleep(2 * time.Second) // Give response time to reach client
+
+		// Get the current executable path
+		execPath, err := os.Executable()
+		if err != nil {
+			fmt.Printf("Failed to get executable path: %v\n", err)
+			return
+		}
+
+		// Restart the server with the same executable
+		cmd := exec.Command(execPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+
+		// Start the new process
+		if err := cmd.Start(); err != nil {
+			fmt.Printf("Failed to start new server process: %v\n", err)
+			return
+		}
+
+		// Exit the current process gracefully
+		fmt.Printf("Server restarting... PID: %d\n", cmd.Process.Pid)
+		os.Exit(0)
+	}()
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Configuration saved successfully! Server will restart automatically.",
 		"configPath": envPath,
+		"restart": true,
 	})
 }
 
