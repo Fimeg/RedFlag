@@ -101,6 +101,7 @@ func main() {
 	dockerHandler := handlers.NewDockerHandler(updateQueries, agentQueries, commandQueries)
 	registrationTokenHandler := handlers.NewRegistrationTokenHandler(registrationTokenQueries, agentQueries, cfg)
 	rateLimitHandler := handlers.NewRateLimitHandler(rateLimiter)
+	downloadHandler := handlers.NewDownloadHandler(filepath.Join(".", "redflag-agent"))
 
 	// Setup router
 	router := gin.Default()
@@ -180,6 +181,10 @@ func main() {
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/approve", dockerHandler.ApproveUpdate)
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/reject", dockerHandler.RejectUpdate)
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/install", dockerHandler.InstallUpdate)
+
+			// Download routes (authenticated)
+			dashboard.GET("/downloads/:platform", downloadHandler.DownloadAgent)
+			dashboard.GET("/install/:platform", downloadHandler.InstallScript)
 
 			// Admin/Registration Token routes (for agent enrollment management)
 			admin := dashboard.Group("/admin")
