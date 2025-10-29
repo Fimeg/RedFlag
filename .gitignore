@@ -237,6 +237,7 @@ Thumbs.db
 redflag-agent
 redflag-server
 aggregator-agent/redflag-agent
+aggregator-agent/aggregator-agent
 aggregator-server/redflag-server
 aggregator-server/server
 
