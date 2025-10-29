@@ -271,7 +271,6 @@ test-results/
 dev/
 
 # Development packages and scripts
-aggregator-agent/pkg/
 aggregator-server/scripts/
 
 # Build artifacts
