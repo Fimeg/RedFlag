@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -50,8 +51,15 @@ type Config struct {
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
-	// Load .env file if it exists (for development)
-	_ = godotenv.Load()
+	// Load .env file from persistent config directory
+	configPaths := []string{"/app/config/.env", ".env"}
+
+	for _, path := range configPaths {
+		if _, err := os.Stat(path); err == nil {
+			_ = godotenv.Load(path)
+			break
+		}
+	}
 
 	cfg := &Config{}
 
@@ -182,8 +190,14 @@ LATEST_AGENT_VERSION=0.1.8
 		username, password, jwtSecret, maxSeats,
 		serverPort, dbUser, dbPassword, dbHost, dbPort, dbName, jwtSecret)
 
-	// Write .env file
-	if err := os.WriteFile(".env", []byte(envContent), 0600); err != nil {
+	// Write .env file to persistent location
+	configDir := "/app/config"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	envPath := filepath.Join(configDir, ".env")
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("failed to write .env file: %w", err)
 	}
 

@@ -17,6 +17,7 @@ import (
 )
 
 func startWelcomeModeServer() {
+	setupHandler := handlers.NewSetupHandler("/app/config")
 	router := gin.Default()
 
 	// Add CORS middleware
@@ -28,54 +29,10 @@ func startWelcomeModeServer() {
 	})
 
 	// Welcome page with setup instructions
-	router.GET("/", func(c *gin.Context) {
-		html := `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>RedFlag - Setup Required</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .setup-options { margin: 30px 0; }
-        .option { background: #f8f9fa; padding: 20px; margin: 15px 0; border-radius: 5px; border-left: 4px solid #007bff; }
-        .code { background: #f1f1f1; padding: 10px; border-radius: 3px; font-family: monospace; }
-        .status { text-align: center; color: #666; margin: 20px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 RedFlag Server</h1>
-        <div class="status">
-            <h2>⏳ Server is waiting for configuration</h2>
-            <p>Choose one of the setup methods below:</p>
-        </div>
+	router.GET("/", setupHandler.ShowSetupPage)
 
-        <div class="setup-options">
-            <div class="option">
-                <h3>Option 1: Command Line Setup</h3>
-                <p>Run this command in your terminal:</p>
-                <div class="code">docker-compose exec server ./redflag-server --setup</div>
-                <p>Follow the interactive prompts to configure your server.</p>
-            </div>
-
-            <div class="option">
-                <h3>Option 2: Web Setup (Coming Soon)</h3>
-                <p>Web-based configuration wizard will be available in a future release.</p>
-                <p>For now, use the command line setup above.</p>
-            </div>
-        </div>
-
-        <div class="status">
-            <p>After configuration, the server will automatically restart.</p>
-            <p>Refresh this page to see the admin interface.</p>
-        </div>
-    </div>
-</body>
-</html>`
-		c.Data(200, "text/html; charset=utf-8", []byte(html))
-	})
+	// Setup endpoint for web configuration
+	router.POST("/api/v1/setup", setupHandler.ConfigureServer)
 
 	// Setup endpoint for web configuration (future)
 	router.GET("/setup", func(c *gin.Context) {
@@ -185,6 +142,7 @@ func main() {
 	registrationTokenHandler := handlers.NewRegistrationTokenHandler(registrationTokenQueries, agentQueries, cfg)
 	rateLimitHandler := handlers.NewRateLimitHandler(rateLimiter)
 	downloadHandler := handlers.NewDownloadHandler(filepath.Join(".", "redflag-agent"))
+	setupHandler := handlers.NewSetupHandler("/app/config")
 
 	// Setup router
 	router := gin.Default()
