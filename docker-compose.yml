@@ -24,7 +24,7 @@ services:
     container_name: redflag-server
     volumes:
       - ./aggregator-agent/redflag-agent:/app/redflag-agent:ro
-      - ./aggregator-server/config:/app/config
+      - server-config:/app/config
       - server-data:/app/data
     depends_on:
       postgres:
@@ -56,3 +56,4 @@ services:
 volumes:
   postgres-data:
   server-data:
+  server-config:
