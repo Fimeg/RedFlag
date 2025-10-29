@@ -12,7 +12,7 @@ git clone https://github.com/Fimeg/RedFlag.git
 cd RedFlag
 
 # Build components (requires Go)
-make build
+make build-all
 
 # Start database
 docker-compose up -d postgres

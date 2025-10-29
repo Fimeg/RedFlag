@@ -21,13 +21,19 @@ agent: ## Build and run the agent
 	cd aggregator-agent && go mod tidy && go run cmd/agent/main.go
 
 build-server: ## Build server binary
-	cd aggregator-server && go build -o bin/aggregator-server cmd/server/main.go
+	cd aggregator-server && go mod tidy && go build -o bin/aggregator-server cmd/server/main.go
 
 build-agent: ## Build agent binary
-	cd aggregator-agent && go build -o bin/aggregator-agent cmd/agent/main.go
+	cd aggregator-agent && go mod tidy && go build -o bin/aggregator-agent cmd/agent/main.go
 
 clean: ## Clean build artifacts
 	rm -rf aggregator-server/bin aggregator-agent/bin
+
+build-all: ## Build with go mod tidy for fresh clones
+	@echo "Building all components with dependency cleanup..."
+	cd aggregator-server && go mod tidy && go build -o redflag-server cmd/server/main.go
+	cd aggregator-agent && go mod tidy && go build -o redflag-agent cmd/agent/main.go
+	@echo "Build complete!"
 
 test: ## Run tests
 	cd aggregator-server && go test ./...

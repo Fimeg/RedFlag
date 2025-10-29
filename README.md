@@ -82,8 +82,14 @@ A self-hosted, cross-platform update management platform built for homelabs and 
 ```bash
 # Clone and build
 git clone https://github.com/Fimeg/RedFlag.git
-cd RedFlag/aggregator-server
-go build -o redflag-server cmd/server/main.go
+cd RedFlag
+
+# Option 1: Use Makefile (recommended)
+make build-all
+
+# Option 2: Manual build
+cd aggregator-server && go mod tidy && go build -o redflag-server cmd/server/main.go
+cd ../aggregator-agent && go mod tidy && go build -o redflag-agent cmd/agent/main.go
 
 # Interactive setup wizard
 sudo ./redflag-server --setup
