@@ -78,37 +78,44 @@ A self-hosted, cross-platform update management platform built for homelabs and 
 
 ## Quick Start
 
-### 1. Server Setup (Linux)
+### 1. Server Setup (Docker - Recommended)
 ```bash
-# Clone and build
+# Clone repository
 git clone https://github.com/Fimeg/RedFlag.git
 cd RedFlag
 
-# Option 1: Use Makefile (recommended)
+# Start database and server
+docker-compose up -d
+
+# Setup server (one-time)
+docker-compose exec server ./redflag-server --setup
+
+# Run database migrations
+docker-compose exec server ./redflag-server --migrate
+
+# Restart server with configuration
+docker-compose restart server
+
+# Access: http://localhost:8080
+# Admin: http://localhost:8080/admin
+```
+
+### 2. Manual Setup (Development)
+```bash
+# Build components
 make build-all
-
-# Option 2: Manual build
-cd aggregator-server && go mod tidy && go build -o redflag-server cmd/server/main.go
-cd ../aggregator-agent && go mod tidy && go build -o redflag-agent cmd/agent/main.go
-
-# Interactive setup wizard
-sudo ./redflag-server --setup
-# Follow prompts for:
-# - Admin credentials
-# - Database configuration
-# - Server settings
-# - Agent seat limits
 
 # Start database
 docker-compose up -d postgres
+
+# Setup server
+cd aggregator-server && sudo ./redflag-server --setup
 
 # Run migrations
 ./redflag-server --migrate
 
 # Start server
 ./redflag-server
-# Server: http://redflag.wiuf.net:8080
-# Dashboard: http://redflag.wiuf.net:8080
 ```
 
 ### 2. Agent Deployment (Linux)

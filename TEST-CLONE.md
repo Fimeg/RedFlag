@@ -11,28 +11,20 @@
 git clone https://github.com/Fimeg/RedFlag.git
 cd RedFlag
 
-# Build components (requires Go)
-make build-all
+# Docker deployment (recommended)
+docker-compose up -d
 
-# Start database
-docker-compose up -d postgres
-
-# Configure server (interactive)
-cd aggregator-server
-./redflag-server --setup
+# One-time server setup
+docker-compose exec server ./redflag-server --setup
 
 # Run database migrations
-./redflag-server --migrate
+docker-compose exec server ./redflag-server --migrate
 
-# Start server
-./redflag-server
+# Restart server with config
+docker-compose restart server
 
-# In another terminal, generate and deploy agent
-cd ../aggregator-agent
-
-# Get token from admin UI: http://localhost:8080/admin
-# Then deploy:
-./aggregator-agent --server http://localhost:8080 --token <YOUR_TOKEN>
+# Test server: http://localhost:8080
+# Admin: http://localhost:8080/admin
 ```
 
 ## What Should Work
