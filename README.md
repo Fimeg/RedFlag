@@ -19,20 +19,20 @@ A self-hosted, cross-platform update management platform built for homelabs and 
 - React Web Dashboard with real-time updates
 - Cross-Platform Agents (Linux APT/DNF/Docker, Windows Updates/Winget)
 - Secure Authentication with registration tokens and refresh tokens
-- Professional Monitoring with real-time status and audit trails
-- Enterprise-Grade Security with rate limiting and TLS support
+- System Monitoring with real-time status and audit trails
+- User-Adjustable Rate Limiting with TLS support
 
 ## Key Features
 
 ### Alpha Features
 - Secure Server Setup: `./redflag-server --setup` with user-provided secrets
 - Registration Token System: One-time tokens for secure agent enrollment
-- Rate Limiting: User-adjustable API security with professional defaults
+- Rate Limiting: User-adjustable API security with sensible defaults
 - Cross-Platform Agents: Linux and Windows with unified architecture
 - Real-Time Heartbeat: Rapid polling for interactive operations
 - Dependency Management: Safe update installation with dry-run checking
 - Audit Logging: Complete activity tracking and history
-- Proxy Support: Enterprise networking with HTTP/HTTPS/SOCKS5 proxies
+- Proxy Support: HTTP/HTTPS/SOCKS5 proxy support for restricted networks
 
 ### Update Management
 - Package Managers: APT, DNF, Docker images, Windows Updates, Winget
@@ -242,7 +242,7 @@ curl -X PUT https://redflag.wiuf.net/api/v1/admin/rate-limits \
 - Admin authentication for server access and management
 
 ### Network Security
-- Rate Limiting: Configurable API protection with professional defaults
+- Rate Limiting: Configurable API protection with sensible defaults
 - TLS Support: Certificate validation and client certificate support
 - Pull-based Model: Agents poll server (firewall-friendly)
 - HTTPS Required: Production deployments must use TLS
@@ -507,3 +507,14 @@ curl -X POST http://localhost:8080/api/v1/updates/{update-id}/confirm-dependenci
 MIT License - see LICENSE file for details.
 
 This is private development software. Use at your own risk.
+
+## Third-Party Licenses
+
+### Windows Update Package (Apache 2.0)
+This project includes a modified version of the `windowsupdate` package from https://github.com/ceshihao/windowsupdate
+
+Copyright 2022 Zheng Dayu
+Licensed under the Apache License, Version 2.0
+Original package: https://github.com/ceshihao/windowsupdate
+
+The package is included in `aggregator-agent/pkg/windowsupdate/` and has been modified for integration with RedFlag's update management system.
