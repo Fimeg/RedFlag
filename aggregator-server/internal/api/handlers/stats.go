@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
 	"github.com/gin-gonic/gin"
 )
 

@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aggregator-project/aggregator-agent/internal/client"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/client"
 )
 
 // DNFScanner scans for DNF/RPM package updates

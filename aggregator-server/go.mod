@@ -1,6 +1,6 @@
-module github.com/aggregator-project/aggregator-server
+module github.com/Fimeg/RedFlag/aggregator-server
 
-go 1.25
+go 1.21
 
 require (
 	github.com/gin-gonic/gin v1.11.0

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aggregator-project/aggregator-agent/internal/client"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/client"
 )
 
 // Color codes for terminal output

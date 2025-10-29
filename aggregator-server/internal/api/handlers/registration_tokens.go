@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/config"
-	"github.com/aggregator-project/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
 	"github.com/gin-gonic/gin"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/models"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/models"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )

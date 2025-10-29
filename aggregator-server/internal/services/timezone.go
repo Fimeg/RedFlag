@@ -3,7 +3,7 @@ package services
 import (
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/config"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
 )
 
 type TimezoneService struct {

@@ -3,7 +3,7 @@
 
 package scanner
 
-import "github.com/aggregator-project/aggregator-agent/internal/client"
+import "github.com/Fimeg/RedFlag/aggregator-agent/internal/client"
 
 // WindowsUpdateScanner stub for non-Windows platforms
 type WindowsUpdateScanner struct{}

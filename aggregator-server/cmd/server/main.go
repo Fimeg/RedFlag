@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/api/handlers"
-	"github.com/aggregator-project/aggregator-server/internal/api/middleware"
-	"github.com/aggregator-project/aggregator-server/internal/config"
-	"github.com/aggregator-project/aggregator-server/internal/database"
-	"github.com/aggregator-project/aggregator-server/internal/database/queries"
-	"github.com/aggregator-project/aggregator-server/internal/services"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/api/handlers"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/api/middleware"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/services"
 	"github.com/gin-gonic/gin"
 )
 

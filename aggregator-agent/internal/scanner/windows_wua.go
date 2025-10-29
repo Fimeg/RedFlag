@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aggregator-project/aggregator-agent/internal/client"
-	"github.com/aggregator-project/aggregator-agent/pkg/windowsupdate"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/client"
+	"github.com/Fimeg/RedFlag/aggregator-agent/pkg/windowsupdate"
 	"github.com/go-ole/go-ole"
 	"github.com/scjalliance/comshim"
 )

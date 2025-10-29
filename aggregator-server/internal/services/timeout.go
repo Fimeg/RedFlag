@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/database/queries"
-	"github.com/aggregator-project/aggregator-server/internal/models"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/models"
 	"github.com/google/uuid"
 )
 

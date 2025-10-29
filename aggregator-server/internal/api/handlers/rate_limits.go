@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/api/middleware"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/api/middleware"
 	"github.com/gin-gonic/gin"
 )
 

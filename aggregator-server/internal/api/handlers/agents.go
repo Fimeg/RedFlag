@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aggregator-project/aggregator-server/internal/api/middleware"
-	"github.com/aggregator-project/aggregator-server/internal/database/queries"
-	"github.com/aggregator-project/aggregator-server/internal/models"
-	"github.com/aggregator-project/aggregator-server/internal/utils"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/api/middleware"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/models"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )

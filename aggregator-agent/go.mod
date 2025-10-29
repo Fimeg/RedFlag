@@ -1,6 +1,6 @@
-module github.com/aggregator-project/aggregator-agent
+module github.com/Fimeg/RedFlag/aggregator-agent
 
-go 1.25
+go 1.21
 
 require (
 	github.com/docker/docker v27.4.1+incompatible

@@ -3,7 +3,7 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/aggregator-project/aggregator-server/internal/services"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/services"
 	"github.com/gin-gonic/gin"
 )
 

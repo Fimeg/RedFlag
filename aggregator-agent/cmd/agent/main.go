@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aggregator-project/aggregator-agent/internal/cache"
-	"github.com/aggregator-project/aggregator-agent/internal/client"
-	"github.com/aggregator-project/aggregator-agent/internal/config"
-	"github.com/aggregator-project/aggregator-agent/internal/display"
-	"github.com/aggregator-project/aggregator-agent/internal/installer"
-	"github.com/aggregator-project/aggregator-agent/internal/scanner"
-	"github.com/aggregator-project/aggregator-agent/internal/system"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/cache"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/client"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/config"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/display"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/installer"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/scanner"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/system"
 	"github.com/google/uuid"
 )
 
