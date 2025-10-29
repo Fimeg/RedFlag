@@ -10,7 +10,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 2,
-      staleTime: 10 * 1000, // 10 seconds
+      staleTime: 0, // Data is always stale to allow real-time updates
+      refetchOnWindowFocus: false, // Don't refetch on window focus to avoid unnecessary requests
     },
   },
 })

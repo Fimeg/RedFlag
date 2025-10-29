@@ -60,6 +60,12 @@ func (i *DockerInstaller) Update(imageName, targetVersion string) (*InstallResul
 	}, nil
 }
 
+// UpdatePackage updates a specific Docker image (alias for Update method)
+func (i *DockerInstaller) UpdatePackage(imageName string) (*InstallResult, error) {
+	// Docker uses same logic for updating as installing
+	return i.Update(imageName, "")
+}
+
 // Install installs a Docker image (alias for Update)
 func (i *DockerInstaller) Install(imageName string) (*InstallResult, error) {
 	return i.Update(imageName, "")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -16,6 +17,29 @@ import (
 )
 
 func main() {
+	// Parse command line flags
+	var setup bool
+	var migrate bool
+	var version bool
+	flag.BoolVar(&setup, "setup", false, "Run setup wizard")
+	flag.BoolVar(&migrate, "migrate", false, "Run database migrations only")
+	flag.BoolVar(&version, "version", false, "Show version information")
+	flag.Parse()
+
+	// Handle special commands
+	if version {
+		fmt.Printf("RedFlag Server v0.1.0-alpha\n")
+		fmt.Printf("Self-hosted update management platform\n")
+		return
+	}
+
+	if setup {
+		if err := config.RunSetupWizard(); err != nil {
+			log.Fatal("Setup failed:", err)
+		}
+		return
+	}
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -23,14 +47,28 @@ func main() {
 	}
 
 	// Set JWT secret
-	middleware.JWTSecret = cfg.JWTSecret
+	middleware.JWTSecret = cfg.Admin.JWTSecret
+
+	// Build database URL from new config structure
+	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Database)
 
 	// Connect to database
-	db, err := database.Connect(cfg.DatabaseURL)
+	db, err := database.Connect(databaseURL)
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
 	defer db.Close()
+
+	// Handle migrate-only flag
+	if migrate {
+		migrationsPath := filepath.Join("internal", "database", "migrations")
+		if err := db.Migrate(migrationsPath); err != nil {
+			log.Fatal("Migration failed:", err)
+		}
+		fmt.Printf("✅ Database migrations completed\n")
+		return
+	}
 
 	// Run migrations
 	migrationsPath := filepath.Join("internal", "database", "migrations")
@@ -45,18 +83,24 @@ func main() {
 	updateQueries := queries.NewUpdateQueries(db.DB)
 	commandQueries := queries.NewCommandQueries(db.DB)
 	refreshTokenQueries := queries.NewRefreshTokenQueries(db.DB)
+	registrationTokenQueries := queries.NewRegistrationTokenQueries(db.DB)
 
 	// Initialize services
 	timezoneService := services.NewTimezoneService(cfg)
 	timeoutService := services.NewTimeoutService(commandQueries, updateQueries)
 
+	// Initialize rate limiter
+	rateLimiter := middleware.NewRateLimiter()
+
 	// Initialize handlers
 	agentHandler := handlers.NewAgentHandler(agentQueries, commandQueries, refreshTokenQueries, cfg.CheckInInterval, cfg.LatestAgentVersion)
-	updateHandler := handlers.NewUpdateHandler(updateQueries, agentQueries, commandQueries)
-	authHandler := handlers.NewAuthHandler(cfg.JWTSecret)
+	updateHandler := handlers.NewUpdateHandler(updateQueries, agentQueries, commandQueries, agentHandler)
+	authHandler := handlers.NewAuthHandler(cfg.Admin.JWTSecret)
 	statsHandler := handlers.NewStatsHandler(agentQueries, updateQueries)
 	settingsHandler := handlers.NewSettingsHandler(timezoneService)
 	dockerHandler := handlers.NewDockerHandler(updateQueries, agentQueries, commandQueries)
+	registrationTokenHandler := handlers.NewRegistrationTokenHandler(registrationTokenQueries, agentQueries, cfg)
+	rateLimitHandler := handlers.NewRateLimitHandler(rateLimiter)
 
 	// Setup router
 	router := gin.Default()
@@ -72,24 +116,26 @@ func main() {
 	// API routes
 	api := router.Group("/api/v1")
 	{
-		// Authentication routes
-		api.POST("/auth/login", authHandler.Login)
+		// Authentication routes (with rate limiting)
+		api.POST("/auth/login", rateLimiter.RateLimit("public_access", middleware.KeyByIP), authHandler.Login)
 		api.POST("/auth/logout", authHandler.Logout)
 		api.GET("/auth/verify", authHandler.VerifyToken)
 
-		// Public routes (no authentication required)
-		api.POST("/agents/register", agentHandler.RegisterAgent)
-		api.POST("/agents/renew", agentHandler.RenewToken)
+		// Public routes (no authentication required, with rate limiting)
+		api.POST("/agents/register", rateLimiter.RateLimit("agent_registration", middleware.KeyByIP), agentHandler.RegisterAgent)
+		api.POST("/agents/renew", rateLimiter.RateLimit("public_access", middleware.KeyByIP), agentHandler.RenewToken)
 
 		// Protected agent routes
 		agents := api.Group("/agents")
 		agents.Use(middleware.AuthMiddleware())
 		{
 			agents.GET("/:id/commands", agentHandler.GetCommands)
-			agents.POST("/:id/updates", updateHandler.ReportUpdates)
-			agents.POST("/:id/logs", updateHandler.ReportLog)
-			agents.POST("/:id/dependencies", updateHandler.ReportDependencies)
-			agents.POST("/:id/system-info", agentHandler.ReportSystemInfo)
+			agents.POST("/:id/updates", rateLimiter.RateLimit("agent_reports", middleware.KeyByAgentID), updateHandler.ReportUpdates)
+			agents.POST("/:id/logs", rateLimiter.RateLimit("agent_reports", middleware.KeyByAgentID), updateHandler.ReportLog)
+			agents.POST("/:id/dependencies", rateLimiter.RateLimit("agent_reports", middleware.KeyByAgentID), updateHandler.ReportDependencies)
+			agents.POST("/:id/system-info", rateLimiter.RateLimit("agent_reports", middleware.KeyByAgentID), agentHandler.ReportSystemInfo)
+			agents.POST("/:id/rapid-mode", rateLimiter.RateLimit("agent_reports", middleware.KeyByAgentID), agentHandler.SetRapidPollingMode)
+			agents.DELETE("/:id", agentHandler.UnregisterAgent)
 		}
 
 		// Dashboard/Web routes (protected by web auth)
@@ -101,7 +147,8 @@ func main() {
 			dashboard.GET("/agents/:id", agentHandler.GetAgent)
 			dashboard.POST("/agents/:id/scan", agentHandler.TriggerScan)
 			dashboard.POST("/agents/:id/update", agentHandler.TriggerUpdate)
-			dashboard.DELETE("/agents/:id", agentHandler.UnregisterAgent)
+			dashboard.POST("/agents/:id/heartbeat", agentHandler.TriggerHeartbeat)
+			dashboard.GET("/agents/:id/heartbeat", agentHandler.GetHeartbeatStatus)
 			dashboard.GET("/updates", updateHandler.ListUpdates)
 			dashboard.GET("/updates/:id", updateHandler.GetUpdate)
 			dashboard.GET("/updates/:id/logs", updateHandler.GetUpdateLogs)
@@ -120,6 +167,7 @@ func main() {
 			dashboard.GET("/commands/recent", updateHandler.GetRecentCommands)
 			dashboard.POST("/commands/:id/retry", updateHandler.RetryCommand)
 			dashboard.POST("/commands/:id/cancel", updateHandler.CancelCommand)
+			dashboard.DELETE("/commands/failed", updateHandler.ClearFailedCommands)
 
 			// Settings routes
 			dashboard.GET("/settings/timezone", settingsHandler.GetTimezone)
@@ -132,6 +180,25 @@ func main() {
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/approve", dockerHandler.ApproveUpdate)
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/reject", dockerHandler.RejectUpdate)
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/install", dockerHandler.InstallUpdate)
+
+			// Admin/Registration Token routes (for agent enrollment management)
+			admin := dashboard.Group("/admin")
+			{
+				admin.POST("/registration-tokens", rateLimiter.RateLimit("admin_token_gen", middleware.KeyByUserID), registrationTokenHandler.GenerateRegistrationToken)
+				admin.GET("/registration-tokens", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.ListRegistrationTokens)
+				admin.GET("/registration-tokens/active", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.GetActiveRegistrationTokens)
+				admin.DELETE("/registration-tokens/:token", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.RevokeRegistrationToken)
+				admin.POST("/registration-tokens/cleanup", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.CleanupExpiredTokens)
+				admin.GET("/registration-tokens/stats", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.GetTokenStats)
+				admin.GET("/registration-tokens/validate", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.ValidateRegistrationToken)
+
+				// Rate Limit Management
+				admin.GET("/rate-limits", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), rateLimitHandler.GetRateLimitSettings)
+				admin.PUT("/rate-limits", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), rateLimitHandler.UpdateRateLimitSettings)
+				admin.POST("/rate-limits/reset", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), rateLimitHandler.ResetRateLimitSettings)
+				admin.GET("/rate-limits/stats", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), rateLimitHandler.GetRateLimitStats)
+				admin.POST("/rate-limits/cleanup", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), rateLimitHandler.CleanupRateLimitEntries)
+			}
 		}
 	}
 
@@ -166,8 +233,11 @@ func main() {
 	}()
 
 	// Start server
-	addr := ":" + cfg.ServerPort
-	fmt.Printf("\n🚩 RedFlag Aggregator Server starting on %s\n\n", addr)
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	fmt.Printf("\nRedFlag Aggregator Server starting on %s\n", addr)
+	fmt.Printf("Admin interface: http://%s:%d/admin\n", cfg.Server.Host, cfg.Server.Port)
+	fmt.Printf("Dashboard: http://%s:%d\n\n", cfg.Server.Host, cfg.Server.Port)
+
 	if err := router.Run(addr); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}

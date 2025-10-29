@@ -29,6 +29,16 @@ create_user() {
         useradd -r -s /bin/false -d "$AGENT_HOME" -m "$AGENT_USER"
         echo "✓ User $AGENT_USER created"
     fi
+
+    # Add user to docker group for Docker update scanning
+    if getent group docker &>/dev/null; then
+        echo "Adding $AGENT_USER to docker group..."
+        usermod -aG docker "$AGENT_USER"
+        echo "✓ User $AGENT_USER added to docker group"
+    else
+        echo "⚠ Docker group not found - Docker updates will not be available"
+        echo "  (Install Docker first, then reinstall the agent to enable Docker support)"
+    fi
 }
 
 # Function to build agent binary
@@ -58,19 +68,19 @@ install_sudoers() {
 # APT package management commands
 redflag-agent ALL=(root) NOPASSWD: /usr/bin/apt-get update
 redflag-agent ALL=(root) NOPASSWD: /usr/bin/apt-get install -y *
-redflag-agent ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade -y
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade -y *
 redflag-agent ALL=(root) NOPASSWD: /usr/bin/apt-get install --dry-run --yes *
 
 # DNF package management commands
-redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf refresh -y
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf makecache
 redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf install -y *
-redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf upgrade -y
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf upgrade -y *
 redflag-agent ALL=(root) NOPASSWD: /usr/bin/dnf install --assumeno --downloadonly *
 
-# Docker operations (uncomment if needed)
-# redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker pull *
-# redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker image inspect *
-# redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker manifest inspect *
+# Docker operations
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker pull *
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker image inspect *
+redflag-agent ALL=(root) NOPASSWD: /usr/bin/docker manifest inspect *
 EOF
 
     chmod 440 "$SUDOERS_FILE"
@@ -103,10 +113,10 @@ Restart=always
 RestartSec=30
 
 # Security hardening
-NoNewPrivileges=true
+# NoNewPrivileges=true - DISABLED: Prevents sudo from working
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$AGENT_HOME
+ReadWritePaths=$AGENT_HOME /var/log /etc/aggregator
 PrivateTmp=true
 
 [Install]

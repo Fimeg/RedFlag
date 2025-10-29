@@ -8,6 +8,7 @@ type Installer interface {
 	Install(packageName string) (*InstallResult, error)
 	InstallMultiple(packageNames []string) (*InstallResult, error)
 	Upgrade() (*InstallResult, error)
+	UpdatePackage(packageName string) (*InstallResult, error)  // New: Update specific package
 	GetPackageType() string
 	DryRun(packageName string) (*InstallResult, error)  // New: Perform dry run to check dependencies
 }

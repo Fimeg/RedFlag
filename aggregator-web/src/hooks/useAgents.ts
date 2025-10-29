@@ -7,8 +7,10 @@ export const useAgents = (params?: ListQueryParams): UseQueryResult<AgentListRes
   return useQuery({
     queryKey: ['agents', params],
     queryFn: () => agentApi.getAgents(params),
-    staleTime: 30 * 1000, // Consider data stale after 30 seconds
-    refetchInterval: 60 * 1000, // Auto-refetch every minute
+    staleTime: 30 * 1000, // Consider data fresh for 30 seconds
+    refetchInterval: 60 * 1000, // Poll every 60 seconds
+    refetchIntervalInBackground: false, // Don't poll when tab is inactive
+    refetchOnWindowFocus: true, // Refresh when window gains focus
   });
 };
 
@@ -17,6 +19,10 @@ export const useAgent = (id: string, enabled: boolean = true): UseQueryResult<Ag
     queryKey: ['agent', id],
     queryFn: () => agentApi.getAgent(id),
     enabled: enabled && !!id,
+    staleTime: 30 * 1000, // Consider data fresh for 30 seconds
+    refetchInterval: 30 * 1000, // Poll every 30 seconds for selected agent
+    refetchIntervalInBackground: false, // Don't poll when tab is inactive
+    refetchOnWindowFocus: true, // Refresh when window gains focus
   });
 };
 

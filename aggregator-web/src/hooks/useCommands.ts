@@ -15,11 +15,12 @@ interface ActiveCommand {
   package_type: string;
 }
 
-export const useActiveCommands = (): UseQueryResult<{ commands: ActiveCommand[]; count: number }, Error> => {
+export const useActiveCommands = (autoRefresh: boolean = true): UseQueryResult<{ commands: ActiveCommand[]; count: number }, Error> => {
   return useQuery({
     queryKey: ['activeCommands'],
     queryFn: () => updateApi.getActiveCommands(),
-    refetchInterval: 5000, // Auto-refresh every 5 seconds
+    refetchInterval: autoRefresh ? 5000 : false, // Auto-refresh every 5 seconds when enabled
+    staleTime: 0, // Override global staleTime to allow refetchInterval to work
   });
 };
 
@@ -50,6 +51,23 @@ export const useCancelCommand = (): UseMutationResult<void, Error, string, unkno
     mutationFn: updateApi.cancelCommand,
     onSuccess: () => {
       // Invalidate active and recent commands queries
+      queryClient.invalidateQueries({ queryKey: ['activeCommands'] });
+      queryClient.invalidateQueries({ queryKey: ['recentCommands'] });
+    },
+  });
+};
+
+export const useClearFailedCommands = (): UseMutationResult<{ message: string; count: number; cheeky_warning?: string }, Error, {
+  olderThanDays?: number;
+  onlyRetried?: boolean;
+  allFailed?: boolean;
+}, unknown> => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: updateApi.clearFailedCommands,
+    onSuccess: () => {
+      // Invalidate active and recent commands queries to refresh the UI
       queryClient.invalidateQueries({ queryKey: ['activeCommands'] });
       queryClient.invalidateQueries({ queryKey: ['recentCommands'] });
     },

@@ -19,9 +19,10 @@ import {
   Eye,
   RotateCcw,
   X,
+  Archive,
 } from 'lucide-react';
 import { useAgents, useUpdates } from '@/hooks/useAgents';
-import { useActiveCommands, useRetryCommand, useCancelCommand } from '@/hooks/useCommands';
+import { useActiveCommands, useRetryCommand, useCancelCommand, useClearFailedCommands } from '@/hooks/useCommands';
 import { getStatusColor, formatRelativeTime, isOnline } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
@@ -34,7 +35,7 @@ interface LiveOperation {
   updateId: string;
   packageName: string;
   action: 'checking_dependencies' | 'installing' | 'pending_dependencies';
-  status: 'running' | 'completed' | 'failed' | 'waiting';
+  status: 'running' | 'completed' | 'failed' | 'pending' | 'sent';
   startTime: Date;
   duration?: number;
   progress?: string;
@@ -42,21 +43,32 @@ interface LiveOperation {
   error?: string;
   commandId: string;
   commandStatus: string;
+  isRetry?: boolean;
+  hasBeenRetried?: boolean;
+  retryCount?: number;
+  retriedFromId?: string;
 }
 
 const LiveOperations: React.FC = () => {
-  const [expandedOperation, setExpandedOperation] = useState<string | null>(null);
+  const [expandedOperations, setExpandedOperations] = useState<Set<string>>(new Set());
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [showCleanupDialog, setShowCleanupDialog] = useState(false);
+  const [cleanupOptions, setCleanupOptions] = useState({
+    olderThanDays: 7,
+    onlyRetried: false,
+    allFailed: false
+  });
 
   // Fetch active commands from API
-  const { data: activeCommandsData, refetch: refetchCommands } = useActiveCommands();
+  const { data: activeCommandsData, refetch: refetchCommands } = useActiveCommands(autoRefresh);
 
-  // Retry and cancel mutations
+  // Retry, cancel, and cleanup mutations
   const retryMutation = useRetryCommand();
   const cancelMutation = useCancelCommand();
+  const clearFailedMutation = useClearFailedCommands();
 
   // Fetch agents for mapping
   const { data: agentsData } = useAgents();
@@ -77,7 +89,9 @@ const LiveOperations: React.FC = () => {
       if (cmd.status === 'failed' || cmd.status === 'timed_out') {
         status = 'failed';
       } else if (cmd.status === 'pending') {
-        status = 'waiting';
+        status = 'pending';
+      } else if (cmd.status === 'sent') {
+        status = 'sent';
       } else if (cmd.status === 'completed') {
         status = 'completed';
       } else {
@@ -105,10 +119,16 @@ const LiveOperations: React.FC = () => {
         packageName: cmd.package_name !== 'N/A' ? cmd.package_name : cmd.command_type,
         action,
         status,
-        startTime: new Date(cmd.created_at),
+        startTime: cmd.created_at ? new Date(cmd.created_at) : new Date(),
         progress: getStatusText(cmd.command_type, cmd.status),
         commandId: cmd.id,
         commandStatus: cmd.status,
+        logOutput: cmd.result?.stdout || cmd.result?.stderr,
+        error: cmd.result?.error_message,
+        isRetry: cmd.is_retry || false,
+        hasBeenRetried: cmd.has_been_retried || false,
+        retryCount: cmd.retry_count || 0,
+        retriedFromId: cmd.retried_from_id,
       };
     });
   }, [activeCommandsData, agents]);
@@ -137,6 +157,32 @@ const LiveOperations: React.FC = () => {
       toast.error(`Failed to cancel command: ${error.message || 'Unknown error'}`);
     }
   };
+
+  // Handle cleanup failed commands
+  const handleClearFailedCommands = async () => {
+    try {
+      const result = await clearFailedMutation.mutateAsync(cleanupOptions);
+      toast.success(result.message);
+      if (result.cheeky_warning) {
+        // Optional: Show a secondary toast with the cheeky warning
+        setTimeout(() => {
+          toast(result.cheeky_warning, {
+            icon: '⚠️',
+            style: {
+              background: '#fef3c7',
+              color: '#92400e',
+            },
+          });
+        }, 1000);
+      }
+      setShowCleanupDialog(false);
+    } catch (error: any) {
+      toast.error(`Failed to clear failed commands: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Count failed operations for display
+  const failedCount = activeOperations.filter(op => op.status === 'failed').length;
 
   function getStatusText(commandType: string, status: string): string {
   if (commandType === 'dry_run_update') {
@@ -172,7 +218,8 @@ const LiveOperations: React.FC = () => {
         return <CheckCircle className="h-4 w-4" />;
       case 'failed':
         return <XCircle className="h-4 w-4" />;
-      case 'waiting':
+      case 'pending':
+      case 'sent':
         return <Clock className="h-4 w-4" />;
       default:
         return <Activity className="h-4 w-4" />;
@@ -235,6 +282,15 @@ const LiveOperations: React.FC = () => {
               <RefreshCw className="h-4 w-4" />
               <span>Refresh Now</span>
             </button>
+            {failedCount > 0 && (
+              <button
+                onClick={() => setShowCleanupDialog(true)}
+                className="flex items-center space-x-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm font-medium transition-colors"
+              >
+                <Archive className="h-4 w-4" />
+                <span>Archive Failed ({failedCount})</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -265,9 +321,9 @@ const LiveOperations: React.FC = () => {
           <div className="bg-white p-4 rounded-lg border border-amber-200 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Waiting</p>
+                <p className="text-sm font-medium text-gray-600">Pending</p>
                 <p className="text-2xl font-bold text-amber-600">
-                  {activeOperations.filter(op => op.status === 'waiting').length}
+                  {activeOperations.filter(op => op.status === 'pending' || op.status === 'sent').length}
                 </p>
               </div>
               <Clock className="h-8 w-8 text-amber-400" />
@@ -331,7 +387,8 @@ const LiveOperations: React.FC = () => {
                 >
                   <option value="all">All Status</option>
                   <option value="running">Running</option>
-                  <option value="waiting">Waiting</option>
+                  <option value="pending">Pending</option>
+                  <option value="sent">Sent</option>
                   <option value="completed">Completed</option>
                   <option value="failed">Failed</option>
                 </select>
@@ -371,6 +428,17 @@ const LiveOperations: React.FC = () => {
                           {getStatusIcon(operation.status)}
                           <span className="ml-1">{operation.status}</span>
                         </span>
+                        {operation.isRetry && operation.retryCount && operation.retryCount > 0 && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                            <RotateCcw className="h-3 w-3 mr-1" />
+                            Retry #{operation.retryCount}
+                          </span>
+                        )}
+                        {operation.hasBeenRetried && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 border border-gray-300">
+                            Retried
+                          </span>
+                        )}
                       </div>
                       <div className="text-sm text-gray-600 flex items-center space-x-1">
                         <Computer className="h-4 w-4" />
@@ -382,7 +450,15 @@ const LiveOperations: React.FC = () => {
 
                     <div className="flex items-center space-x-2">
                       <button
-                        onClick={() => setExpandedOperation(expandedOperation === operation.id ? null : operation.id)}
+                        onClick={() => {
+                          const newExpanded = new Set(expandedOperations);
+                          if (newExpanded.has(operation.id)) {
+                            newExpanded.delete(operation.id);
+                          } else {
+                            newExpanded.add(operation.id);
+                          }
+                          setExpandedOperations(newExpanded);
+                        }}
                         className="flex items-center space-x-1 px-3 py-1 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
                       >
                         <Eye className="h-4 w-4" />
@@ -390,7 +466,7 @@ const LiveOperations: React.FC = () => {
                         <ChevronDown
                           className={cn(
                             "h-4 w-4 transition-transform",
-                            expandedOperation === operation.id && "rotate-180"
+                            expandedOperations.has(operation.id) && "rotate-180"
                           )}
                         />
                       </button>
@@ -403,7 +479,7 @@ const LiveOperations: React.FC = () => {
                 </div>
 
                 {/* Expanded details */}
-                {expandedOperation === operation.id && (
+                {expandedOperations.has(operation.id) && (
                   <div className="p-4 bg-gray-50 border-t border-gray-200">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div>
@@ -460,14 +536,21 @@ const LiveOperations: React.FC = () => {
 
                           {/* Retry button for failed/timed_out commands */}
                           {operation.commandStatus === 'failed' || operation.commandStatus === 'timed_out' ? (
-                            <button
-                              onClick={() => handleRetryCommand(operation.commandId)}
-                              disabled={retryMutation.isPending}
-                              className="w-full flex items-center justify-center space-x-2 px-3 py-2 bg-green-100 text-green-700 rounded-md hover:bg-green-200 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <RotateCcw className="h-4 w-4" />
-                              <span>{retryMutation.isPending ? 'Retrying...' : 'Retry Command'}</span>
-                            </button>
+                            operation.hasBeenRetried ? (
+                              <div className="w-full flex items-center justify-center space-x-2 px-3 py-2 bg-purple-50 text-purple-700 rounded-md border border-purple-200 text-sm font-medium">
+                                <RotateCcw className="h-4 w-4" />
+                                <span>Already Retried</span>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleRetryCommand(operation.commandId)}
+                                disabled={retryMutation.isPending}
+                                className="w-full flex items-center justify-center space-x-2 px-3 py-2 bg-green-100 text-green-700 rounded-md hover:bg-green-200 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                                <span>{retryMutation.isPending ? 'Retrying...' : 'Retry Command'}</span>
+                              </button>
+                            )
                           ) : null}
                         </div>
                       </div>
@@ -501,6 +584,114 @@ const LiveOperations: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Cleanup Confirmation Dialog */}
+      {showCleanupDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Archive Failed Operations</h3>
+
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-sm text-blue-800">
+                <strong>INFO:</strong> This will remove failed commands from the active operations view, but all history will be preserved in the database for audit trails and continuity.
+              </p>
+            </div>
+
+            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+              <p className="text-sm text-yellow-800">
+                <strong>WARNING:</strong> This shouldn't be necessary if the retry logic is working properly - you might want to check what's causing commands to fail in the first place!
+              </p>
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Clear operations older than
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="0"
+                    value={cleanupOptions.olderThanDays}
+                    onChange={(e) => setCleanupOptions(prev => ({
+                      ...prev,
+                      olderThanDays: parseInt(e.target.value) || 0
+                    }))}
+                    className="w-20 px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  />
+                  <span className="text-sm text-gray-600">days</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Cleanup scope
+                </label>
+                <div className="space-y-2">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="cleanupScope"
+                      checked={!cleanupOptions.onlyRetried && !cleanupOptions.allFailed}
+                      onChange={() => setCleanupOptions(prev => ({
+                        ...prev,
+                        onlyRetried: false,
+                        allFailed: false
+                      }))}
+                      className="mr-2"
+                    />
+                    <span className="text-sm text-gray-700">All failed commands older than specified days</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="cleanupScope"
+                      checked={cleanupOptions.onlyRetried}
+                      onChange={() => setCleanupOptions(prev => ({
+                        ...prev,
+                        onlyRetried: true,
+                        allFailed: false
+                      }))}
+                      className="mr-2"
+                    />
+                    <span className="text-sm text-gray-700">Only failed commands that have been retried</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="cleanupScope"
+                      checked={cleanupOptions.allFailed}
+                      onChange={() => setCleanupOptions(prev => ({
+                        ...prev,
+                        onlyRetried: false,
+                        allFailed: true
+                      }))}
+                      className="mr-2"
+                    />
+                    <span className="text-sm text-red-700 font-medium">All failed commands (most aggressive)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowCleanupDialog(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearFailedCommands}
+                disabled={clearFailedMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {clearFailedMutation.isPending ? 'Archiving...' : 'Archive Failed Commands'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

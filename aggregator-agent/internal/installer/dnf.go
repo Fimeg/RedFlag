@@ -31,15 +31,8 @@ func (i *DNFInstaller) IsAvailable() bool {
 func (i *DNFInstaller) Install(packageName string) (*InstallResult, error) {
 	startTime := time.Now()
 
-	// Refresh package cache first using secure executor
-	refreshResult, err := i.executor.ExecuteCommand("dnf", []string{"makecache"})
-	if err != nil {
-		refreshResult.DurationSeconds = int(time.Since(startTime).Seconds())
-		refreshResult.ErrorMessage = fmt.Sprintf("Failed to refresh DNF cache: %v", err)
-		return refreshResult, fmt.Errorf("dnf refresh failed: %w", err)
-	}
-
-	// Install package using secure executor
+	// For single package installs, skip makecache to avoid repository conflicts
+	// Only run makecache when installing multiple packages (InstallMultiple method)
 	installResult, err := i.executor.ExecuteCommand("dnf", []string{"install", "-y", packageName})
 	duration := int(time.Since(startTime).Seconds())
 
@@ -75,17 +68,11 @@ func (i *DNFInstaller) InstallMultiple(packageNames []string) (*InstallResult, e
 
 	startTime := time.Now()
 
-	// Refresh package cache first using secure executor
-	refreshResult, err := i.executor.ExecuteCommand("dnf", []string{"makecache"})
-	if err != nil {
-		refreshResult.DurationSeconds = int(time.Since(startTime).Seconds())
-		refreshResult.ErrorMessage = fmt.Sprintf("Failed to refresh DNF cache: %v", err)
-		return refreshResult, fmt.Errorf("dnf refresh failed: %w", err)
-	}
-
 	// Install all packages in one command using secure executor
 	args := []string{"install", "-y"}
 	args = append(args, packageNames...)
+
+	// Install all packages in one command using secure executor
 	installResult, err := i.executor.ExecuteCommand("dnf", args)
 	duration := int(time.Since(startTime).Seconds())
 
@@ -297,6 +284,37 @@ func (i *DNFInstaller) extractPackageNameFromDNFLine(line string) string {
 	}
 
 	return ""
+}
+
+// UpdatePackage updates a specific package using DNF
+func (i *DNFInstaller) UpdatePackage(packageName string) (*InstallResult, error) {
+	startTime := time.Now()
+
+	// Update specific package using secure executor
+	// Use 'dnf upgrade' instead of 'dnf install' for existing packages
+	updateResult, err := i.executor.ExecuteCommand("dnf", []string{"upgrade", "-y", packageName})
+	duration := int(time.Since(startTime).Seconds())
+
+	if err != nil {
+		return &InstallResult{
+			Success:        false,
+			ErrorMessage:   fmt.Sprintf("DNF upgrade failed: %v", err),
+			Stdout:         updateResult.Stdout,
+			Stderr:         updateResult.Stderr,
+			ExitCode:       updateResult.ExitCode,
+			DurationSeconds: duration,
+		}, err
+	}
+
+	return &InstallResult{
+		Success:        true,
+		Stdout:         updateResult.Stdout,
+		Stderr:         updateResult.Stderr,
+		ExitCode:       updateResult.ExitCode,
+		DurationSeconds: duration,
+		PackagesInstalled: []string{packageName},
+		Action:         "upgrade",
+	}, nil
 }
 
 // GetPackageType returns type of packages this installer handles

@@ -14,7 +14,14 @@ import {
   DockerContainerListResponse,
   DockerStats,
   DockerUpdateRequest,
-  BulkDockerUpdateRequest
+  BulkDockerUpdateRequest,
+  RegistrationToken,
+  CreateRegistrationTokenRequest,
+  RegistrationTokenStats,
+  RateLimitConfig,
+  RateLimitStats,
+  RateLimitUsage,
+  RateLimitSummary
 } from '@/types';
 
 // Base URL for API
@@ -73,6 +80,21 @@ export const agentApi = {
   // Trigger scan on single agent
   scanAgent: async (id: string): Promise<void> => {
     await api.post(`/agents/${id}/scan`);
+  },
+
+  // Trigger heartbeat toggle on single agent
+  toggleHeartbeat: async (id: string, enabled: boolean, durationMinutes: number = 10): Promise<{ message: string; command_id: string; enabled: boolean }> => {
+    const response = await api.post(`/agents/${id}/heartbeat`, {
+      enabled: enabled,
+      duration_minutes: durationMinutes,
+    });
+    return response.data;
+  },
+
+  // Get heartbeat status for single agent
+  getHeartbeatStatus: async (id: string): Promise<{ enabled: boolean; until: string | null; active: boolean; duration_minutes: number }> => {
+    const response = await api.get(`/agents/${id}/heartbeat`);
+    return response.data;
   },
 
   // Unregister/remove agent
@@ -145,6 +167,28 @@ export const updateApi = {
     const response = await api.get('/commands/recent', {
       params: limit ? { limit } : undefined
     });
+    return response.data;
+  },
+
+  // Clear failed commands with filtering options
+  clearFailedCommands: async (options?: {
+    olderThanDays?: number;
+    onlyRetried?: boolean;
+    allFailed?: boolean;
+  }): Promise<{ message: string; count: number; cheeky_warning?: string }> => {
+    const params = new URLSearchParams();
+
+    if (options?.olderThanDays !== undefined) {
+      params.append('older_than_days', options.olderThanDays.toString());
+    }
+    if (options?.onlyRetried) {
+      params.append('only_retried', 'true');
+    }
+    if (options?.allFailed) {
+      params.append('all_failed', 'true');
+    }
+
+    const response = await api.delete(`/commands/failed${params.toString() ? '?' + params.toString() : ''}`);
     return response.data;
   },
 };
@@ -348,6 +392,146 @@ export const dockerApi = {
   // Trigger Docker scan on agents
   triggerScan: async (agentIds?: string[]): Promise<void> => {
     await api.post('/docker/scan', { agent_ids: agentIds });
+  },
+};
+
+// Admin API endpoints
+export const adminApi = {
+  // Registration Token Management
+  tokens: {
+    // Get all registration tokens
+    getTokens: async (params?: {
+      page?: number;
+      page_size?: number;
+      is_active?: boolean;
+      label?: string;
+    }): Promise<{ tokens: RegistrationToken[]; total: number; page: number; page_size: number }> => {
+      const response = await api.get('/admin/registration-tokens', { params });
+      return response.data;
+    },
+
+    // Get single registration token
+    getToken: async (id: string): Promise<RegistrationToken> => {
+      const response = await api.get(`/admin/registration-tokens/${id}`);
+      return response.data;
+    },
+
+    // Create new registration token
+    createToken: async (request: CreateRegistrationTokenRequest): Promise<RegistrationToken> => {
+      const response = await api.post('/admin/registration-tokens', request);
+      return response.data;
+    },
+
+    // Revoke registration token
+    revokeToken: async (id: string): Promise<void> => {
+      await api.delete(`/admin/registration-tokens/${id}`);
+    },
+
+    // Get registration token statistics
+    getStats: async (): Promise<RegistrationTokenStats> => {
+      const response = await api.get('/admin/registration-tokens/stats');
+      return response.data;
+    },
+
+    // Cleanup expired tokens
+    cleanup: async (): Promise<{ cleaned: number }> => {
+      const response = await api.post('/admin/registration-tokens/cleanup');
+      return response.data;
+    },
+  },
+
+  // Rate Limiting Management
+  rateLimits: {
+    // Get all rate limit configurations
+    getConfigs: async (): Promise<RateLimitConfig[]> => {
+      const response = await api.get('/admin/rate-limits');
+      return response.data;
+    },
+
+    // Update rate limit configuration
+    updateConfig: async (endpoint: string, config: Partial<RateLimitConfig>): Promise<RateLimitConfig> => {
+      const response = await api.put(`/admin/rate-limits/${endpoint}`, config);
+      return response.data;
+    },
+
+    // Update all rate limit configurations
+    updateAllConfigs: async (configs: RateLimitConfig[]): Promise<RateLimitConfig[]> => {
+      const response = await api.put('/admin/rate-limits', { configs });
+      return response.data;
+    },
+
+    // Reset rate limit configurations to defaults
+    resetConfigs: async (): Promise<RateLimitConfig[]> => {
+      const response = await api.post('/admin/rate-limits/reset');
+      return response.data;
+    },
+
+    // Get rate limit statistics
+    getStats: async (): Promise<RateLimitStats[]> => {
+      const response = await api.get('/admin/rate-limits/stats');
+      return response.data;
+    },
+
+    // Get rate limit usage
+    getUsage: async (): Promise<RateLimitUsage[]> => {
+      const response = await api.get('/admin/rate-limits/usage');
+      return response.data;
+    },
+
+    // Get rate limit summary
+    getSummary: async (): Promise<RateLimitSummary> => {
+      const response = await api.get('/admin/rate-limits/summary');
+      return response.data;
+    },
+
+    // Cleanup expired rate limit data
+    cleanup: async (): Promise<{ cleaned: number }> => {
+      const response = await api.post('/admin/rate-limits/cleanup');
+      return response.data;
+    },
+  },
+
+  // System Administration
+  system: {
+    // Get system health and status
+    getHealth: async (): Promise<{
+      status: 'healthy' | 'degraded' | 'unhealthy';
+      uptime: number;
+      version: string;
+      database_status: 'connected' | 'disconnected';
+      active_agents: number;
+      active_tokens: number;
+      rate_limits_enabled: boolean;
+    }> => {
+      const response = await api.get('/admin/system/health');
+      return response.data;
+    },
+
+    // Get active agents
+    getActiveAgents: async (): Promise<{
+      agents: Array<{
+        id: string;
+        hostname: string;
+        last_seen: string;
+        status: string;
+      }>;
+      count: number;
+    }> => {
+      const response = await api.get('/admin/system/active-agents');
+      return response.data;
+    },
+
+    // Get system configuration
+    getConfig: async (): Promise<Record<string, any>> => {
+      const response = await api.get('/admin/system/config');
+      return response.data;
+    },
+
+    // Update system configuration
+    updateConfig: async (config: Record<string, any>): Promise<Record<string, any>> => {
+      const response = await api.put('/admin/system/config', config);
+      return response.data;
+    },
   },
 };
 

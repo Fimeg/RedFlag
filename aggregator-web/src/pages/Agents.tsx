@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Computer,
@@ -6,6 +6,7 @@ import {
   Search,
   Filter,
   ChevronRight as ChevronRightIcon,
+  ChevronDown,
   Activity,
   Calendar,
   Package,
@@ -23,6 +24,9 @@ import {
 } from 'lucide-react';
 import { useAgents, useAgent, useScanAgent, useScanMultipleAgents, useUnregisterAgent } from '@/hooks/useAgents';
 import { useActiveCommands, useCancelCommand } from '@/hooks/useCommands';
+import { useHeartbeatStatus, useInvalidateHeartbeat, useHeartbeatAgentSync } from '@/hooks/useHeartbeat';
+import { agentApi } from '@/lib/api';
+import { useQueryClient } from '@tanstack/react-query';
 import { getStatusColor, formatRelativeTime, isOnline, formatBytes } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
@@ -32,6 +36,7 @@ import ChatTimeline from '@/components/ChatTimeline';
 const Agents: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -39,6 +44,40 @@ const Agents: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [heartbeatDuration, setHeartbeatDuration] = useState<number>(10); // Default 10 minutes
+  const [showDurationDropdown, setShowDurationDropdown] = useState(false);
+  const [heartbeatLoading, setHeartbeatLoading] = useState(false); // Loading state for heartbeat toggle
+  const [heartbeatCommandId, setHeartbeatCommandId] = useState<string | null>(null); // Track specific heartbeat command
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDurationDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Duration options for heartbeat
+  const durationOptions = [
+    { label: '10 minutes', value: 10 },
+    { label: '30 minutes', value: 30 },
+    { label: '1 hour', value: 60 },
+    { label: 'Permanent', value: -1 },
+  ];
+
+  // Get duration label for display
+  const getDurationLabel = (duration: number) => {
+    const option = durationOptions.find(opt => opt.value === duration);
+    return option?.label || '10 minutes';
+  };
 
   // Debounce search query to avoid API calls on every keystroke
   useEffect(() => {
@@ -50,6 +89,18 @@ const Agents: React.FC = () => {
       clearTimeout(timer);
     };
   }, [searchQuery]);
+
+  
+  // Update current time every second for countdown timers
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
 
   // Helper function to get system metadata from agent
   const getSystemMetadata = (agent: any) => {
@@ -124,8 +175,41 @@ const Agents: React.FC = () => {
     return { platform, distribution, version: version.trim() };
   };
 
+  // Helper function to format heartbeat expiration time
+  const formatHeartExpiration = (untilString: string) => {
+    const until = new Date(untilString);
+    const now = new Date();
+    const diffMs = until.getTime() - now.getTime();
+
+    if (diffMs <= 0) {
+      return 'expired';
+    }
+
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    if (diffMinutes < 60) {
+      return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''}`;
+    }
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    const remainingMinutes = diffMinutes % 60;
+
+    if (diffHours < 24) {
+      return remainingMinutes > 0
+        ? `${diffHours} hour${diffHours !== 1 ? 's' : ''} ${remainingMinutes} min`
+        : `${diffHours} hour${diffHours !== 1 ? 's' : ''}`;
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+    const remainingHours = diffHours % 24;
+
+    return remainingHours > 0
+      ? `${diffDays} day${diffDays !== 1 ? 's' : ''} ${remainingHours} hour${remainingHours !== 1 ? 's' : ''}`
+      : `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+  };
+
   // Fetch agents list
-  const { data: agentsData, isPending, error } = useAgents({
+  const { data: agentsData, isPending, error, refetch } = useAgents({
     search: debouncedSearchQuery || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
   });
@@ -141,8 +225,30 @@ const Agents: React.FC = () => {
   const { data: activeCommandsData, refetch: refetchActiveCommands } = useActiveCommands();
   const cancelCommandMutation = useCancelCommand();
 
+  
   const agents = agentsData?.agents || [];
   const selectedAgent = selectedAgentData || agents.find(a => a.id === id);
+
+  // Get heartbeat status for selected agent (smart polling - only when active)
+  const { data: heartbeatStatus } = useHeartbeatStatus(selectedAgent?.id || '', !!selectedAgent);
+  const invalidateHeartbeat = useInvalidateHeartbeat();
+  const syncAgentData = useHeartbeatAgentSync(selectedAgent?.id || '', heartbeatStatus);
+
+  
+  // Simple completion handling - clear loading state quickly
+  useEffect(() => {
+    if (!heartbeatCommandId) return;
+
+    // Clear loading state quickly since smart polling will handle UI updates
+    const timeout = setTimeout(() => {
+      setHeartbeatCommandId(null);
+      setHeartbeatLoading(false);
+    }, 2000); // 2 seconds - enough time for command to process
+
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [heartbeatCommandId]);
 
   // Filter agents based on OS
   const filteredAgents = agents.filter(agent => {
@@ -224,6 +330,40 @@ const Agents: React.FC = () => {
     }
   };
 
+  // Handle rapid polling toggle
+  const handleRapidPollingToggle = async (agentId: string, enabled: boolean, durationMinutes?: number) => {
+    // Prevent multiple clicks
+    if (heartbeatLoading) return;
+
+    setHeartbeatLoading(true);
+    try {
+      const duration = durationMinutes || heartbeatDuration;
+      const result = await agentApi.toggleHeartbeat(agentId, enabled, duration);
+
+      // Immediately invalidate cache to force fresh data
+      invalidateHeartbeat(agentId);
+
+      // Store the command ID for minimal tracking
+      if (result.command_id) {
+        setHeartbeatCommandId(result.command_id);
+      }
+
+      if (enabled) {
+        if (duration === -1) {
+          toast.success('Heartbeat enabled permanently');
+        } else {
+          toast.success(`Heartbeat enabled for ${duration} minutes`);
+        }
+      } else {
+        toast.success('Heartbeat disabled');
+      }
+    } catch (error: any) {
+      toast.error(`Failed to send heartbeat command: ${error.message || 'Unknown error'}`);
+      setHeartbeatLoading(false);
+      setHeartbeatCommandId(null);
+    }
+  };
+
   // Get agent-specific active commands
   const getAgentActiveCommands = () => {
     if (!selectedAgent || !activeCommandsData?.commands) return [];
@@ -232,11 +372,19 @@ const Agents: React.FC = () => {
 
   // Helper function to get command display info
   const getCommandDisplayInfo = (command: any) => {
+    // Helper to get package name from command params
+    const getPackageName = (cmd: any) => {
+      if (cmd.package_name) return cmd.package_name;
+      if (cmd.params?.package_name) return cmd.params.package_name;
+      if (cmd.params?.update_id && cmd.update_name) return cmd.update_name;
+      return 'unknown package';
+    };
+
     const actionMap: { [key: string]: { icon: React.ReactNode; label: string } } = {
       'scan': { icon: <RefreshCw className="h-4 w-4" />, label: 'System scan' },
-      'install_updates': { icon: <Package className="h-4 w-4" />, label: `Installing ${command.package_name || 'packages'}` },
-      'dry_run_update': { icon: <Search className="h-4 w-4" />, label: `Checking dependencies for ${command.package_name || 'packages'}` },
-      'confirm_dependencies': { icon: <CheckCircle className="h-4 w-4" />, label: `Installing confirmed dependencies` },
+      'install_updates': { icon: <Package className="h-4 w-4" />, label: `Installing ${getPackageName(command)}` },
+      'dry_run_update': { icon: <Search className="h-4 w-4" />, label: `Checking dependencies for ${getPackageName(command)}` },
+      'confirm_dependencies': { icon: <CheckCircle className="h-4 w-4" />, label: `Installing ${getPackageName(command)}` },
     };
 
     return actionMap[command.command_type] || {
@@ -386,22 +534,88 @@ const Agents: React.FC = () => {
                     {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
                   </span>
                 </div>
+
+                {/* Heartbeat Status Indicator */}
+                <div className="flex items-center space-x-2">
+                  {(() => {
+                    // Use dedicated heartbeat status instead of general agent metadata
+                    const isRapidPolling = heartbeatStatus?.enabled && heartbeatStatus?.active;
+
+                    return (
+                      <button
+                        onClick={() => handleRapidPollingToggle(selectedAgent.id, !isRapidPolling)}
+                        disabled={heartbeatLoading}
+                        className={cn(
+                          'flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-colors',
+                          heartbeatLoading
+                            ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
+                            : isRapidPolling
+                            ? 'bg-pink-100 text-pink-800 border border-pink-200 hover:bg-pink-200 cursor-pointer'
+                            : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 cursor-pointer'
+                        )}
+                        title={heartbeatLoading ? 'Sending command...' : `Click to toggle ${isRapidPolling ? 'normal' : 'heartbeat'} mode`}
+                      >
+                        {heartbeatLoading ? (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Activity className={cn(
+                            'h-3 w-3',
+                            isRapidPolling ? 'text-pink-600 animate-pulse' : 'text-gray-400'
+                          )} />
+                        )}
+                        <span>
+                          {heartbeatLoading ? 'Sending...' : isRapidPolling ? 'Heartbeat (5s)' : 'Normal (5m)'}
+                        </span>
+                      </button>
+                    );
+                  })()}
+                </div>
               </div>
 
               {/* Compact Timeline Display */}
               <div className="space-y-2 mb-3">
                 {(() => {
                   const agentCommands = getAgentActiveCommands();
-                  const activeCommands = agentCommands.filter(cmd =>
+
+                  // Separate heartbeat commands from other commands
+                  const heartbeatCommands = agentCommands.filter(cmd =>
+                    cmd.command_type === 'enable_heartbeat' || cmd.command_type === 'disable_heartbeat'
+                  );
+                  const otherCommands = agentCommands.filter(cmd =>
+                    cmd.command_type !== 'enable_heartbeat' && cmd.command_type !== 'disable_heartbeat'
+                  );
+
+                  // For heartbeat commands: only show the MOST RECENT one, but exclude old completed ones
+                  const recentHeartbeatCommands = heartbeatCommands.filter(cmd => {
+                    const createdTime = new Date(cmd.created_at);
+                    const now = new Date();
+                    const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
+
+                    // Exclude completed/failed heartbeat commands older than 30 minutes
+                    if ((cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out') && hoursOld > 0.5) {
+                      return false;
+                    }
+                    return true;
+                  });
+
+                  const latestHeartbeatCommand = recentHeartbeatCommands.length > 0
+                    ? [recentHeartbeatCommands.reduce((latest, cmd) =>
+                        new Date(cmd.created_at) > new Date(latest.created_at) ? cmd : latest
+                      )]
+                    : [];
+
+                  // For other commands: show active ones normally
+                  const activeOtherCommands = otherCommands.filter(cmd =>
                     cmd.status === 'running' || cmd.status === 'sent' || cmd.status === 'pending'
                   );
-                  const completedCommands = agentCommands.filter(cmd =>
+                  const completedOtherCommands = otherCommands.filter(cmd =>
                     cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out'
                   ).slice(0, 1); // Only show last completed
 
                   const displayCommands = [
-                    ...activeCommands.slice(0, 2), // Max 2 active
-                    ...completedCommands.slice(0, 1) // Max 1 completed
+                    ...latestHeartbeatCommand.slice(0, 1), // Max 1 heartbeat (latest only)
+                    ...activeOtherCommands.slice(0, 2), // Max 2 active other commands
+                    ...completedOtherCommands.slice(0, 1) // Max 1 completed other command
                   ].slice(0, 3); // Total max 3 entries
 
                   if (displayCommands.length === 0) {
@@ -454,7 +668,18 @@ const Agents: React.FC = () => {
                           </div>
                           <div className="flex items-center justify-between mt-1">
                             <span className="text-xs text-gray-500">
-                              {formatRelativeTime(command.created_at)}
+                              {(() => {
+                                const createdTime = new Date(command.created_at);
+                                const now = new Date();
+                                const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
+
+                                // Show exact time for commands older than 1 hour, relative time for recent ones
+                                if (hoursOld > 1) {
+                                  return createdTime.toLocaleString();
+                                } else {
+                                  return formatRelativeTime(command.created_at);
+                                }
+                              })()}
                             </span>
                             {isActive && (command.status === 'pending' || command.status === 'sent') && (
                               <button
@@ -478,6 +703,13 @@ const Agents: React.FC = () => {
                 <span>Last seen: {formatRelativeTime(selectedAgent.last_seen)}</span>
                 <span>Last scan: {selectedAgent.last_scan ? formatRelativeTime(selectedAgent.last_scan) : 'Never'}</span>
               </div>
+
+              {/* Heartbeat Status Info */}
+              {heartbeatStatus?.enabled && heartbeatStatus?.active && (
+                <div className="text-xs text-pink-600 bg-pink-50 px-2 py-1 rounded-md mt-2">
+                  Heartbeat active for {formatHeartExpiration(heartbeatStatus.until)}
+                </div>
+              )}
 
               {/* Action Button */}
               <div className="flex justify-center mt-3 pt-3 border-t border-gray-200">
@@ -649,6 +881,71 @@ const Agents: React.FC = () => {
                   <Package className="h-4 w-4 mr-2" />
                   View All Updates
                 </button>
+
+                {/* Split button for heartbeat with duration */}
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => {
+                      // Use dedicated heartbeat status instead of general agent metadata
+                      const isRapidPolling = heartbeatStatus?.enabled && heartbeatStatus?.active;
+                      handleRapidPollingToggle(selectedAgent.id, !isRapidPolling);
+                    }}
+                    disabled={heartbeatLoading}
+                    className={cn(
+                      'flex-1 btn transition-colors',
+                      heartbeatLoading
+                        ? 'opacity-50 cursor-not-allowed'
+                        : heartbeatStatus?.enabled && heartbeatStatus?.active
+                        ? 'btn-primary' // Use primary style for active heartbeat
+                        : 'btn-secondary' // Use secondary style for normal mode
+                    )}
+                  >
+                    {heartbeatLoading ? (
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Activity className="h-4 w-4 mr-2" />
+                    )}
+                    {heartbeatLoading
+                      ? 'Sending Command...'
+                      : heartbeatStatus?.enabled && heartbeatStatus?.active
+                      ? 'Disable Heartbeat'
+                      : 'Enable Heartbeat (5s)'
+                    }
+                  </button>
+
+                  {/* Duration dropdown */}
+                  <div className="relative" ref={dropdownRef}>
+                    <button
+                      onClick={() => setShowDurationDropdown(!showDurationDropdown)}
+                      className="btn btn-secondary px-3 min-w-[100px]"
+                    >
+                      {getDurationLabel(heartbeatDuration)}
+                      <ChevronDown className="h-4 w-4 ml-1" />
+                    </button>
+
+                    {showDurationDropdown && (
+                      <div className="absolute right-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+                        <div className="py-1">
+                          {durationOptions.map((option) => (
+                            <button
+                              key={option.value}
+                              onClick={() => {
+                                setHeartbeatDuration(option.value);
+                                setShowDurationDropdown(false);
+                              }}
+                              className={cn(
+                                'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors',
+                                heartbeatDuration === option.value ? 'bg-gray-100 font-medium' : 'text-gray-700'
+                              )}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 <button
                   onClick={() => handleRemoveAgent(selectedAgent.id, selectedAgent.hostname)}

@@ -18,6 +18,19 @@ export const formatDate = (dateString: string): string => {
   });
 };
 
+export const formatDateTime = (dateString: string | null): string => {
+  if (!dateString) return 'Never';
+
+  const date = new Date(dateString);
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 export const formatRelativeTime = (dateString: string): string => {
   if (!dateString) return 'Never';
 

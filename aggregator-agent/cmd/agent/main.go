@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	AgentVersion = "0.1.8" // Added dnf makecache to security allowlist, retry tracking
+	AgentVersion = "0.1.16" // Enhanced configuration system with proxy support and registration tokens
 )
 
 // getConfigPath returns the platform-specific config path
@@ -30,6 +30,26 @@ func getConfigPath() string {
 		return "C:\\ProgramData\\RedFlag\\config.json"
 	}
 	return "/etc/aggregator/config.json"
+}
+
+// getCurrentPollingInterval returns the appropriate polling interval based on rapid mode
+func getCurrentPollingInterval(cfg *config.Config) int {
+	// Check if rapid polling mode is active and not expired
+	if cfg.RapidPollingEnabled && time.Now().Before(cfg.RapidPollingUntil) {
+		return 5 // Rapid polling: 5 seconds
+	}
+
+	// Check if rapid polling has expired and clean up
+	if cfg.RapidPollingEnabled && time.Now().After(cfg.RapidPollingUntil) {
+		cfg.RapidPollingEnabled = false
+		cfg.RapidPollingUntil = time.Time{}
+		// Save the updated config to clean up expired rapid mode
+		if err := cfg.Save(getConfigPath()); err != nil {
+			log.Printf("Warning: Failed to cleanup expired rapid polling mode: %v", err)
+		}
+	}
+
+	return cfg.CheckInInterval // Normal polling: 5 minutes (300 seconds) by default
 }
 
 // getDefaultServerURL returns the default server URL with environment variable support
@@ -48,16 +68,65 @@ func getDefaultServerURL() string {
 }
 
 func main() {
+	// Define CLI flags
 	registerCmd := flag.Bool("register", false, "Register agent with server")
 	scanCmd := flag.Bool("scan", false, "Scan for updates and display locally")
 	statusCmd := flag.Bool("status", false, "Show agent status")
 	listUpdatesCmd := flag.Bool("list-updates", false, "List detailed update information")
-	serverURL := flag.String("server", getDefaultServerURL(), "Server URL")
+	versionCmd := flag.Bool("version", false, "Show version information")
+	serverURL := flag.String("server", "", "Server URL")
+	registrationToken := flag.String("token", "", "Registration token for secure enrollment")
+	proxyHTTP := flag.String("proxy-http", "", "HTTP proxy URL")
+	proxyHTTPS := flag.String("proxy-https", "", "HTTPS proxy URL")
+	proxyNoProxy := flag.String("proxy-no", "", "Comma-separated hosts to bypass proxy")
+	logLevel := flag.String("log-level", "", "Log level (debug, info, warn, error)")
+	configFile := flag.String("config", "", "Configuration file path")
+	tagsFlag := flag.String("tags", "", "Comma-separated tags for agent")
+	organization := flag.String("organization", "", "Organization/group name")
+	displayName := flag.String("name", "", "Display name for agent")
+	insecureTLS := flag.Bool("insecure-tls", false, "Skip TLS certificate verification")
 	exportFormat := flag.String("export", "", "Export format: json, csv")
 	flag.Parse()
 
-	// Load configuration
-	cfg, err := config.Load(getConfigPath())
+	// Handle version command
+	if *versionCmd {
+		fmt.Printf("RedFlag Agent v%s\n", AgentVersion)
+		fmt.Printf("Self-hosted update management platform\n")
+		os.Exit(0)
+	}
+
+	// Parse tags from comma-separated string
+	var tags []string
+	if *tagsFlag != "" {
+		tags = strings.Split(*tagsFlag, ",")
+		for i, tag := range tags {
+			tags[i] = strings.TrimSpace(tag)
+		}
+	}
+
+	// Create CLI flags structure
+	cliFlags := &config.CLIFlags{
+		ServerURL:         *serverURL,
+		RegistrationToken: *registrationToken,
+		ProxyHTTP:         *proxyHTTP,
+		ProxyHTTPS:        *proxyHTTPS,
+		ProxyNoProxy:      *proxyNoProxy,
+		LogLevel:         *logLevel,
+		ConfigFile:        *configFile,
+		Tags:              tags,
+		Organization:      *organization,
+		DisplayName:       *displayName,
+		InsecureTLS:       *insecureTLS,
+	}
+
+	// Determine config path
+	configPath := getConfigPath()
+	if *configFile != "" {
+		configPath = *configFile
+	}
+
+	// Load configuration with priority: CLI > env > file > defaults
+	cfg, err := config.Load(configPath, cliFlags)
 	if err != nil {
 		log.Fatal("Failed to load configuration:", err)
 	}
@@ -313,6 +382,24 @@ func runAgent(cfg *config.Config) error {
 			}
 		}
 
+		// Add heartbeat status to metrics metadata if available
+		if metrics != nil && cfg.RapidPollingEnabled {
+			// Check if rapid polling is still valid
+			if time.Now().Before(cfg.RapidPollingUntil) {
+				// Include heartbeat metadata in metrics
+				if metrics.Metadata == nil {
+					metrics.Metadata = make(map[string]interface{})
+				}
+				metrics.Metadata["rapid_polling_enabled"] = true
+				metrics.Metadata["rapid_polling_until"] = cfg.RapidPollingUntil.Format(time.RFC3339)
+				metrics.Metadata["rapid_polling_duration_minutes"] = int(time.Until(cfg.RapidPollingUntil).Minutes())
+			} else {
+				// Heartbeat expired, disable it
+				cfg.RapidPollingEnabled = false
+				cfg.RapidPollingUntil = time.Time{}
+			}
+		}
+
 		// Get commands from server (with optional metrics)
 		commands, err := apiClient.GetCommands(cfg.AgentID, metrics)
 		if err != nil {
@@ -320,7 +407,7 @@ func runAgent(cfg *config.Config) error {
 			newClient, renewErr := renewTokenIfNeeded(apiClient, cfg, err)
 			if renewErr != nil {
 				log.Printf("Check-in unsuccessful and token renewal failed: %v\n", renewErr)
-				time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+				time.Sleep(time.Duration(getCurrentPollingInterval(cfg)) * time.Second)
 				continue
 			}
 
@@ -331,12 +418,12 @@ func runAgent(cfg *config.Config) error {
 				commands, err = apiClient.GetCommands(cfg.AgentID, metrics)
 				if err != nil {
 					log.Printf("Check-in unsuccessful even after token renewal: %v\n", err)
-					time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+					time.Sleep(time.Duration(getCurrentPollingInterval(cfg)) * time.Second)
 					continue
 				}
 			} else {
 				log.Printf("Check-in unsuccessful: %v\n", err)
-				time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+				time.Sleep(time.Duration(getCurrentPollingInterval(cfg)) * time.Second)
 				continue
 			}
 		}
@@ -375,13 +462,23 @@ func runAgent(cfg *config.Config) error {
 					log.Printf("Error confirming dependencies: %v\n", err)
 				}
 
+			case "enable_heartbeat":
+				if err := handleEnableHeartbeat(apiClient, cfg, cmd.ID, cmd.Params); err != nil {
+					log.Printf("[Heartbeat] Error enabling heartbeat: %v\n", err)
+				}
+
+			case "disable_heartbeat":
+				if err := handleDisableHeartbeat(apiClient, cfg, cmd.ID); err != nil {
+					log.Printf("[Heartbeat] Error disabling heartbeat: %v\n", err)
+				}
+
 			default:
 				log.Printf("Unknown command type: %s\n", cmd.Type)
 			}
 		}
 
 		// Wait for next check-in
-		time.Sleep(time.Duration(cfg.CheckInInterval) * time.Second)
+		time.Sleep(time.Duration(getCurrentPollingInterval(cfg)) * time.Second)
 	}
 }
 
@@ -743,9 +840,9 @@ func handleInstallUpdates(apiClient *client.Client, cfg *config.Config, commandI
 
 	// Perform installation based on what's specified
 	if packageName != "" {
-		action = "install"
-		log.Printf("Installing package: %s (type: %s)", packageName, packageType)
-		result, err = inst.Install(packageName)
+		action = "update"
+		log.Printf("Updating package: %s (type: %s)", packageName, packageType)
+		result, err = inst.UpdatePackage(packageName)
 	} else if len(params) > 1 {
 		// Multiple packages might be specified in various ways
 		var packageNames []string
@@ -774,15 +871,15 @@ func handleInstallUpdates(apiClient *client.Client, cfg *config.Config, commandI
 	}
 
 	if err != nil {
-		// Report installation failure
+		// Report installation failure with actual command output
 		logReport := client.LogReport{
 			CommandID:       commandID,
 			Action:          action,
 			Result:          "failed",
-			Stdout:          "",
-			Stderr:          fmt.Sprintf("Installation error: %v", err),
-			ExitCode:        1,
-			DurationSeconds: 0,
+			Stdout:          result.Stdout,
+			Stderr:          result.Stderr,
+			ExitCode:        result.ExitCode,
+			DurationSeconds: result.DurationSeconds,
 		}
 
 		if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
@@ -991,21 +1088,22 @@ func handleConfirmDependencies(apiClient *client.Client, cfg *config.Config, com
 		allPackages := append([]string{packageName}, dependencies...)
 		result, err = inst.InstallMultiple(allPackages)
 	} else {
-		action = "install"
+		action = "upgrade"
 		log.Printf("Installing package: %s (no dependencies)", packageName)
-		result, err = inst.Install(packageName)
+		// Use UpdatePackage instead of Install to handle existing packages
+		result, err = inst.UpdatePackage(packageName)
 	}
 
 	if err != nil {
-		// Report installation failure
+		// Report installation failure with actual command output
 		logReport := client.LogReport{
 			CommandID:       commandID,
 			Action:          action,
 			Result:          "failed",
-			Stdout:          "",
-			Stderr:          fmt.Sprintf("Installation error: %v", err),
-			ExitCode:        1,
-			DurationSeconds: 0,
+			Stdout:          result.Stdout,
+			Stderr:          result.Stderr,
+			ExitCode:        result.ExitCode,
+			DurationSeconds: result.DurationSeconds,
 		}
 
 		if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
@@ -1048,6 +1146,145 @@ func handleConfirmDependencies(apiClient *client.Client, cfg *config.Config, com
 		log.Printf("  Error: %s\n", result.ErrorMessage)
 	}
 
+	return nil
+}
+
+// handleEnableHeartbeat handles enable_heartbeat command
+func handleEnableHeartbeat(apiClient *client.Client, cfg *config.Config, commandID string, params map[string]interface{}) error {
+	// Parse duration parameter (default to 10 minutes)
+	durationMinutes := 10
+	if duration, ok := params["duration_minutes"]; ok {
+		if durationFloat, ok := duration.(float64); ok {
+			durationMinutes = int(durationFloat)
+		}
+	}
+
+	// Calculate when heartbeat should expire
+	expiryTime := time.Now().Add(time.Duration(durationMinutes) * time.Minute)
+
+	log.Printf("[Heartbeat] Enabling rapid polling for %d minutes (expires: %s)", durationMinutes, expiryTime.Format(time.RFC3339))
+
+	// Update agent config to enable rapid polling
+	cfg.RapidPollingEnabled = true
+	cfg.RapidPollingUntil = expiryTime
+
+	// Save config to persist heartbeat settings
+	if err := cfg.Save(getConfigPath()); err != nil {
+		log.Printf("[Heartbeat] Warning: Failed to save config: %v", err)
+	}
+
+	// Create log report for heartbeat enable
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          "enable_heartbeat",
+		Result:          "success",
+		Stdout:          fmt.Sprintf("Heartbeat enabled for %d minutes", durationMinutes),
+		Stderr:          "",
+		ExitCode:        0,
+		DurationSeconds: 0,
+	}
+
+	if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+		log.Printf("[Heartbeat] Failed to report heartbeat enable: %v", reportErr)
+	}
+
+	// Send immediate check-in to update heartbeat status in UI
+	log.Printf("[Heartbeat] Sending immediate check-in to update status")
+	sysMetrics, err := system.GetLightweightMetrics()
+	if err == nil {
+		metrics := &client.SystemMetrics{
+			CPUPercent:    sysMetrics.CPUPercent,
+			MemoryPercent: sysMetrics.MemoryPercent,
+			MemoryUsedGB:  sysMetrics.MemoryUsedGB,
+			MemoryTotalGB: sysMetrics.MemoryTotalGB,
+			DiskUsedGB:    sysMetrics.DiskUsedGB,
+			DiskTotalGB:   sysMetrics.DiskTotalGB,
+			DiskPercent:   sysMetrics.DiskPercent,
+			Uptime:        sysMetrics.Uptime,
+			Version:       AgentVersion,
+		}
+		// Include heartbeat metadata to show enabled state
+		metrics.Metadata = map[string]interface{}{
+			"rapid_polling_enabled": true,
+			"rapid_polling_until":   expiryTime.Format(time.RFC3339),
+		}
+
+		// Send immediate check-in with updated heartbeat status
+		_, checkinErr := apiClient.GetCommands(cfg.AgentID, metrics)
+		if checkinErr != nil {
+			log.Printf("[Heartbeat] Failed to send immediate check-in: %v", checkinErr)
+		} else {
+			log.Printf("[Heartbeat] Immediate check-in sent successfully")
+		}
+	} else {
+		log.Printf("[Heartbeat] Failed to get system metrics for immediate check-in: %v", err)
+	}
+
+	log.Printf("[Heartbeat] Rapid polling enabled successfully")
+	return nil
+}
+
+// handleDisableHeartbeat handles disable_heartbeat command
+func handleDisableHeartbeat(apiClient *client.Client, cfg *config.Config, commandID string) error {
+	log.Printf("[Heartbeat] Disabling rapid polling")
+
+	// Update agent config to disable rapid polling
+	cfg.RapidPollingEnabled = false
+	cfg.RapidPollingUntil = time.Time{} // Zero value
+
+	// Save config to persist heartbeat settings
+	if err := cfg.Save(getConfigPath()); err != nil {
+		log.Printf("[Heartbeat] Warning: Failed to save config: %v", err)
+	}
+
+	// Create log report for heartbeat disable
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          "disable_heartbeat",
+		Result:          "success",
+		Stdout:          "Heartbeat disabled",
+		Stderr:          "",
+		ExitCode:        0,
+		DurationSeconds: 0,
+	}
+
+	if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+		log.Printf("[Heartbeat] Failed to report heartbeat disable: %v", reportErr)
+	}
+
+	// Send immediate check-in to update heartbeat status in UI
+	log.Printf("[Heartbeat] Sending immediate check-in to update status")
+	sysMetrics, err := system.GetLightweightMetrics()
+	if err == nil {
+		metrics := &client.SystemMetrics{
+			CPUPercent:    sysMetrics.CPUPercent,
+			MemoryPercent: sysMetrics.MemoryPercent,
+			MemoryUsedGB:  sysMetrics.MemoryUsedGB,
+			MemoryTotalGB: sysMetrics.MemoryTotalGB,
+			DiskUsedGB:    sysMetrics.DiskUsedGB,
+			DiskTotalGB:   sysMetrics.DiskTotalGB,
+			DiskPercent:   sysMetrics.DiskPercent,
+			Uptime:        sysMetrics.Uptime,
+			Version:       AgentVersion,
+		}
+		// Include empty heartbeat metadata to explicitly show disabled state
+		metrics.Metadata = map[string]interface{}{
+			"rapid_polling_enabled": false,
+			"rapid_polling_until":   "",
+		}
+
+		// Send immediate check-in with updated heartbeat status
+		_, checkinErr := apiClient.GetCommands(cfg.AgentID, metrics)
+		if checkinErr != nil {
+			log.Printf("[Heartbeat] Failed to send immediate check-in: %v", checkinErr)
+		} else {
+			log.Printf("[Heartbeat] Immediate check-in sent successfully")
+		}
+	} else {
+		log.Printf("[Heartbeat] Failed to get system metrics for immediate check-in: %v", err)
+	}
+
+	log.Printf("[Heartbeat] Rapid polling disabled successfully")
 	return nil
 }
 

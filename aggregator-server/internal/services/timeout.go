@@ -162,7 +162,8 @@ func (ts *TimeoutService) updateRelatedPackageStatus(command *models.AgentComman
 		command.Params["package_type"].(string),
 		command.Params["package_name"].(string),
 		"failed",
-		metadata)
+		metadata,
+		nil) // nil = use time.Now() for timeout operations
 }
 
 // extractUpdatePackageID extracts the update package ID from command params

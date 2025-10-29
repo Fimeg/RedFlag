@@ -1,15 +1,333 @@
 # RedFlag (Aggregator)
 
-⚠️ PRIVATE DEVELOPMENT - NOT FOR PUBLIC USE
-
-This is a private development repository for version retention only.
+**ALPHA RELEASE - v0.1.16**
+Self-hosted update management platform for homelabs and small teams
 
 ## Status
 
-- **Active Development**: In progress
-- **Not Production Ready**: Do not use
-- **Breaking Changes Expected**: APIs will change
-- **No Support Available**: This is not released software
+- **Core Features Working**: Update management, agent registration, web dashboard
+- **Alpha Deployment Ready**: Setup wizard and configuration system implemented
+- **Cross-Platform Support**: Linux and Windows agents
+- **In Development**: Enhanced features and polish
+- **Alpha Software**: Expect some rough edges, backup your data
+
+## What RedFlag Is
+
+A self-hosted, cross-platform update management platform built for homelabs and small teams:
+
+- Go Server Backend with PostgreSQL database
+- React Web Dashboard with real-time updates
+- Cross-Platform Agents (Linux APT/DNF/Docker, Windows Updates/Winget)
+- Secure Authentication with registration tokens and refresh tokens
+- Professional Monitoring with real-time status and audit trails
+- Enterprise-Grade Security with rate limiting and TLS support
+
+## Key Features
+
+### Alpha Features
+- Secure Server Setup: `./redflag-server --setup` with user-provided secrets
+- Registration Token System: One-time tokens for secure agent enrollment
+- Rate Limiting: User-adjustable API security with professional defaults
+- Cross-Platform Agents: Linux and Windows with unified architecture
+- Real-Time Heartbeat: Rapid polling for interactive operations
+- Dependency Management: Safe update installation with dry-run checking
+- Audit Logging: Complete activity tracking and history
+- Proxy Support: Enterprise networking with HTTP/HTTPS/SOCKS5 proxies
+
+### Update Management
+- Package Managers: APT, DNF, Docker images, Windows Updates, Winget
+- Update Discovery: Automatic scanning with severity classification
+- Approval Workflow: Controlled update deployment with confirmation
+- Bulk Operations: Multi-agent management and batch operations
+- Rollback Support: Failed update tracking and retry capabilities
+
+### Deployment
+- Configuration Management: CLI flags → environment → config file → defaults
+- Service Integration: systemd service management on Linux
+- Cross-Platform Installers: One-liner deployment scripts
+- Container Support: Docker and Kubernetes deployment options
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Web Dashboard  │  React + TypeScript + TailwindCSS
+│  + Rate Limiting │  + Registration Token Management
+└────────┬────────┘
+         │ HTTPS with TLS + User Authentication
+┌────────▼────────┐
+│  Server (Go)    │  Alpha with PostgreSQL
+│  + Rate Limits  │  + Registration Tokens + Setup Wizard
+│  + JWT Auth     │  + Heartbeat System + Comprehensive API
+└────────┬────────┘
+         │ Pull-based (agents check in every 5 min) + Rapid Polling
+    ┌────┴────┬────────┐
+    │         │        │
+┌───▼──┐  ┌──▼──┐  ┌──▼───┐
+│Linux │  │Windows│  │Linux │
+│Agent │  │Agent  │  │Agent │
+│+Proxy│  │+Proxy│  │+Proxy│
+└──────┘  └───────┘  └──────┘
+```
+
+## Quick Start
+
+### 1. Server Setup (Linux)
+```bash
+# Clone and build
+git clone https://github.com/Fimeg/RedFlag.git
+cd RedFlag/aggregator-server
+go build -o redflag-server cmd/server/main.go
+
+# Interactive setup wizard
+sudo ./redflag-server --setup
+# Follow prompts for:
+# - Admin credentials
+# - Database configuration
+# - Server settings
+# - Agent seat limits
+
+# Start database
+docker-compose up -d postgres
+
+# Run migrations
+./redflag-server --migrate
+
+# Start server
+./redflag-server
+# Server: http://redflag.wiuf.net:8080
+# Dashboard: http://redflag.wiuf.net:8080
+```
+
+### 2. Agent Deployment (Linux)
+```bash
+# Option 1: One-liner with registration token
+sudo bash -c 'curl -sfL https://redflag.wiuf.net/install | bash -s -- rf-tok-abc123'
+
+# Option 2: Manual installation
+sudo ./install.sh --server https://redflag.wiuf.net:8080 --token rf-tok-abc123
+
+# Option 3: Advanced configuration with proxy
+sudo ./redflag-agent --server https://redflag.wiuf.net:8080 \
+                      --token rf-tok-abc123 \
+                      --proxy-http http://proxy.company.com:8080 \
+                      --organization "my-homelab" \
+                      --tags "production,webserver"
+```
+
+### 3. Windows Agent Deployment
+```powershell
+# PowerShell one-liner
+iwr https://redflag.wiuf.net/install.ps1 | iex -Arguments '--server https://redflag.wiuf.net:8080 --token rf-tok-abc123'
+
+# Or manual download and install
+.\redflag-agent.exe --server https://redflag.wiuf.net:8080 --token rf-tok-abc123
+```
+
+## Agent Configuration Options
+
+### CLI Flags (Highest Priority)
+```bash
+./redflag-agent --server https://redflag.wiuf.net \
+                --token rf-tok-abc123 \
+                --proxy-http http://proxy.company.com:8080 \
+                --proxy-https https://proxy.company.com:8080 \
+                --log-level debug \
+                --organization "my-homelab" \
+                --tags "production,webserver" \
+                --name "redflag-server-01" \
+                --insecure-tls
+```
+
+### Environment Variables
+```bash
+export REDFLAG_SERVER_URL="https://redflag.wiuf.net"
+export REDFLAG_REGISTRATION_TOKEN="rf-tok-abc123"
+export REDFLAG_HTTP_PROXY="http://proxy.company.com:8080"
+export REDFLAG_HTTPS_PROXY="https://proxy.company.com:8080"
+export REDFLAG_NO_PROXY="localhost,127.0.0.1"
+export REDFLAG_LOG_LEVEL="info"
+export REDFLAG_ORGANIZATION="my-homelab"
+```
+
+### Configuration File
+```json
+{
+  "server_url": "https://redflag.wiuf.net",
+  "registration_token": "rf-tok-abc123",
+  "proxy": {
+    "enabled": true,
+    "http": "http://proxy.company.com:8080",
+    "https": "https://proxy.company.com:8080",
+    "no_proxy": "localhost,127.0.0.1"
+  },
+  "network": {
+    "timeout": "30s",
+    "retry_count": 3,
+    "retry_delay": "5s"
+  },
+  "logging": {
+    "level": "info",
+    "max_size": 100,
+    "max_backups": 3
+  },
+  "tags": ["production", "webserver"],
+  "organization": "my-homelab",
+  "display_name": "redflag-server-01"
+}
+```
+
+## Web Dashboard Features
+
+### Agent Management
+- Real-time Status: Online/offline with heartbeat indicators
+- System Information: CPU, memory, disk usage, OS details
+- Version Tracking: Agent versions and update availability
+- Metadata Management: Tags, organizations, display names
+- Bulk Operations: Multi-agent scanning and updates
+
+### Update Management
+- Severity Classification: Critical, high, medium, low priority updates
+- Approval Workflow: Controlled update deployment with dependencies
+- Dependency Resolution: Safe installation with conflict checking
+- Batch Operations: Approve/install multiple updates
+- Audit Trail: Complete history of all operations
+
+### Settings & Administration
+- Registration Tokens: Generate and manage secure enrollment tokens
+- Rate Limiting: User-adjustable API security settings
+- Authentication: Secure login with session management
+- Audit Logging: Comprehensive activity tracking
+- Server Configuration: Admin settings and system controls
+
+## API Reference
+
+### Registration Token Management
+```bash
+# Generate registration token
+curl -X POST https://redflag.wiuf.net/api/v1/admin/registration-tokens \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"label": "Production Servers", "expires_in": "24h"}'
+
+# List tokens
+curl -X GET https://redflag.wiuf.net/api/v1/admin/registration-tokens \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Revoke token
+curl -X DELETE https://redflag.wiuf.net/api/v1/admin/registration-tokens/rf-tok-abc123 \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Rate Limit Management
+```bash
+# View current settings
+curl -X GET https://redflag.wiuf.net/api/v1/admin/rate-limits \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Update settings
+curl -X PUT https://redflag.wiuf.net/api/v1/admin/rate-limits \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{
+    "agent_registration": {"requests": 10, "window": "1m", "enabled": true},
+    "admin_operations": {"requests": 200, "window": "1m", "enabled": true}
+  }'
+```
+
+## Security
+
+### Authentication & Authorization
+- Registration Tokens: One-time use tokens prevent unauthorized agent enrollment
+- Refresh Token Authentication: 90-day sliding window with 24h access tokens
+- SHA-256 token hashing for secure storage
+- Admin authentication for server access and management
+
+### Network Security
+- Rate Limiting: Configurable API protection with professional defaults
+- TLS Support: Certificate validation and client certificate support
+- Pull-based Model: Agents poll server (firewall-friendly)
+- HTTPS Required: Production deployments must use TLS
+
+### System Hardening
+- Minimal Privilege Execution: Agents run with least required privileges
+- Command Validation: Whitelisted commands only
+- Secure Defaults: Hardened configurations out of the box
+- Security Hardening: Minimal privilege execution and sudoers management
+
+### Audit & Monitoring
+- Audit Trails: Complete logging of all activities
+- Token Renewal: `/renew` endpoint prevents daily re-registration
+- Activity Tracking: Comprehensive monitoring and alerting
+- Access Logs: Full audit trail of user and agent actions
+
+## Docker Deployment
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  redflag-server:
+    build: ./aggregator-server
+    ports:
+      - "8080:8080"
+    environment:
+      - REDFLAG_SERVER_HOST=0.0.0.0
+      - REDFLAG_SERVER_PORT=8080
+      - REDFLAG_DB_HOST=postgres
+      - REDFLAG_DB_PORT=5432
+      - REDFLAG_DB_NAME=redflag
+      - REDFLAG_DB_USER=redflag
+      - REDFLAG_DB_PASSWORD=secure-password
+    depends_on:
+      - postgres
+    volumes:
+      - ./redflag-data:/etc/redflag
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: redflag
+      POSTGRES_USER: redflag
+      POSTGRES_PASSWORD: secure-password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+```
+
+## Project Structure
+
+```
+RedFlag/
+├── aggregator-server/          # Go server backend
+│   ├── cmd/server/            # Main server entry point
+│   ├── internal/
+│   │   ├── api/               # REST API handlers and middleware
+│   │   │   └── handlers/       # API endpoint implementations
+│   │   ├── database/          # Database layer with migrations
+│   │   │   ├── migrations/     # Database schema migrations
+│   │   │   └── queries/        # Database query functions
+│   │   ├── models/            # Data models and structs
+│   │   ├── services/          # Business logic services
+│   │   └── config/            # Configuration management
+│   └── redflag-server          # Server binary
+
+├── aggregator-agent/           # Cross-platform Go agent
+│   ├── cmd/agent/             # Agent main entry point
+│   ├── internal/
+│   │   ├── client/           # HTTP client with token renewal
+│   │   ├── config/           # Enhanced configuration system
+│   │   ├── scanner/          # Update scanners for each platform
+│   │   ├── installer/        # Package installers
+│   │   └── system/           # System information collection
+│   ├── install.sh             # Linux installation script
+│   └── redflag-agent           # Agent binary
+
+├── aggregator-web/             # React dashboard
+├── docker-compose.yml          # Development environment
+├── Makefile                    # Common tasks
+└── README.md                   # This file
+```
 
 ## What This Is
 
@@ -45,9 +363,8 @@ A self-hosted, cross-platform update management platform built with:
 - Event-sourced database architecture for scalability
 
 ### Known Limitations
-- No rate limiting on API endpoints (security improvement needed)
 - No real-time WebSocket updates
-- Proxmox integration is broken (needs complete rewrite)
+- Proxmox integration is not implemented in this version (planned for future release)
 - Authentication system works but needs security hardening
 
 ## Screenshots
@@ -80,81 +397,6 @@ This repository contains:
 - **Agent code** (`aggregator-agent/`)
 - **Web dashboard** (`aggregator-web/`)
 - **Database migrations** and configuration
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Web Dashboard  │  React + TypeScript + TailwindCSS
-└────────┬────────┘
-         │ HTTPS
-┌────────▼────────┐
-│  Server (Go)    │  Production Ready with PostgreSQL
-│  + PostgreSQL   │
-└────────┬────────┘
-         │ Pull-based (agents check in every 5 min)
-    ┌────┴────┬────────┐
-    │         │        │
-┌───▼──┐  ┌──▼──┐  ┌──▼───┐
-│Linux │  │Windows│  │Linux │
-│Agent │  │Agent  │  │Agent │
-└──────┘  └───────┘  └──────┘
-```
-
-## Project Structure
-
-```
-RedFlag/
-├── aggregator-server/      # Go server (Gin + PostgreSQL)
-│   ├── cmd/server/         # Main entry point
-│   ├── internal/
-│   │   ├── api/            # HTTP handlers & middleware
-│   │   │   └── handlers/   # API endpoint handlers
-│   │   ├── database/       # Database layer & migrations
-│   │   │   ├── migrations/ # Database schema migrations
-│   │   │   └── queries/    # Database query functions
-│   │   ├── models/         # Data models and structs
-│   │   ├── services/       # Business logic services
-│   │   ├── utils/          # Utility functions
-│   │   └── config/         # Configuration management
-│   └── go.mod
-
-├── aggregator-agent/       # Go agent (cross-platform)
-│   ├── cmd/agent/          # Main entry point
-│   ├── internal/
-│   │   ├── cache/          # Local cache system for offline viewing
-│   │   ├── client/         # API client with token renewal
-│   │   ├── config/         # Configuration management
-│   │   ├── display/        # Terminal output formatting
-│   │   ├── installer/      # Update installers
-│   │   │   ├── apt.go      # APT package installer
-│   │   │   ├── dnf.go      # DNF package installer
-│   │   │   ├── docker.go   # Docker image installer
-│   │   │   ├── windows.go  # Windows installer base
-│   │   │   ├── winget.go   # Winget package installer
-│   │   │   ├── security.go # Security utilities
-│   │   │   └── sudoers.go  # Sudo management
-│   │   ├── scanner/        # Update scanners
-│   │   │   ├── apt.go      # APT package scanner
-│   │   │   ├── dnf.go      # DNF package scanner
-│   │   │   ├── docker.go   # Docker image scanner
-│   │   │   ├── registry.go # Docker registry client
-│   │   │   ├── windows.go  # Windows Update scanner
-│   │   │   ├── winget.go   # Winget package scanner
-│   │   │   └── windows_*.go # Windows Update API components
-│   │   ├── system/         # System information collection
-│   │   │   ├── info.go     # System metrics
-│   │   │   └── windows.go  # Windows system info
-│   │   └── executor/       # Command execution
-│   ├── install.sh          # Linux installation script
-│   ├── uninstall.sh        # Linux uninstallation script
-│   └── go.mod
-
-├── aggregator-web/         # React dashboard
-├── docker-compose.yml      # PostgreSQL for local dev
-├── Makefile                # Common tasks
-└── README.md               # This file
-```
 
 ## Database Schema
 
@@ -259,15 +501,6 @@ curl -X POST http://localhost:8080/api/v1/updates/{update-id}/approve
 # Confirm dependencies and install
 curl -X POST http://localhost:8080/api/v1/updates/{update-id}/confirm-dependencies
 ```
-
-## Security
-
-- Agent Authentication: Refresh token system with 90-day sliding window + 24h access tokens
-- SHA-256 token hashing for secure storage
-- Pull-based Model: Agents poll server (firewall-friendly)
-- Command Validation: Whitelisted commands only
-- TLS Required: Production deployments must use HTTPS
-- Token Renewal: `/renew` endpoint prevents daily re-registration
 
 ## License
 

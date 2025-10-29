@@ -16,9 +16,11 @@ import (
 
 // Client handles API communication with the server
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL               string
+	token                 string
+	http                  *http.Client
+	RapidPollingEnabled   bool
+	RapidPollingUntil     time.Time
 }
 
 // NewClient creates a new API client
@@ -159,20 +161,28 @@ type Command struct {
 
 // CommandsResponse contains pending commands
 type CommandsResponse struct {
-	Commands []Command `json:"commands"`
+	Commands     []Command           `json:"commands"`
+	RapidPolling *RapidPollingConfig `json:"rapid_polling,omitempty"`
+}
+
+// RapidPollingConfig contains rapid polling configuration from server
+type RapidPollingConfig struct {
+	Enabled bool   `json:"enabled"`
+	Until   string `json:"until"` // ISO 8601 timestamp
 }
 
 // SystemMetrics represents lightweight system metrics sent with check-ins
 type SystemMetrics struct {
-	CPUPercent    float64 `json:"cpu_percent,omitempty"`
-	MemoryPercent float64 `json:"memory_percent,omitempty"`
-	MemoryUsedGB  float64 `json:"memory_used_gb,omitempty"`
-	MemoryTotalGB float64 `json:"memory_total_gb,omitempty"`
-	DiskUsedGB    float64 `json:"disk_used_gb,omitempty"`
-	DiskTotalGB   float64 `json:"disk_total_gb,omitempty"`
-	DiskPercent   float64 `json:"disk_percent,omitempty"`
-	Uptime        string  `json:"uptime,omitempty"`
-	Version       string  `json:"version,omitempty"`        // Agent version
+	CPUPercent    float64                   `json:"cpu_percent,omitempty"`
+	MemoryPercent float64                   `json:"memory_percent,omitempty"`
+	MemoryUsedGB  float64                   `json:"memory_used_gb,omitempty"`
+	MemoryTotalGB float64                   `json:"memory_total_gb,omitempty"`
+	DiskUsedGB    float64                   `json:"disk_used_gb,omitempty"`
+	DiskTotalGB   float64                   `json:"disk_total_gb,omitempty"`
+	DiskPercent   float64                   `json:"disk_percent,omitempty"`
+	Uptime        string                    `json:"uptime,omitempty"`
+	Version       string                    `json:"version,omitempty"`        // Agent version
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`      // Additional metadata
 }
 
 // GetCommands retrieves pending commands from the server
@@ -217,6 +227,16 @@ func (c *Client) GetCommands(agentID uuid.UUID, metrics *SystemMetrics) ([]Comma
 	var result CommandsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
+	}
+
+	// Handle rapid polling configuration if provided
+	if result.RapidPolling != nil {
+		// Parse the timestamp
+		if until, err := time.Parse(time.RFC3339, result.RapidPolling.Until); err == nil {
+			// Update client's rapid polling configuration
+			c.RapidPollingEnabled = result.RapidPolling.Enabled
+			c.RapidPollingUntil = until
+		}
 	}
 
 	return result.Commands, nil

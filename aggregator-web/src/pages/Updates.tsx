@@ -419,14 +419,14 @@ const Updates: React.FC = () => {
                   <div>
                     <p className="text-sm text-gray-600">Discovered</p>
                     <p className="text-sm font-medium text-gray-900">
-                      {formatRelativeTime(selectedUpdate.created_at)}
+                      {formatRelativeTime(selectedUpdate.last_discovered_at)}
                     </p>
                   </div>
 
                   <div>
                     <p className="text-sm text-gray-600">Last Updated</p>
                     <p className="text-sm font-medium text-gray-900">
-                      {formatRelativeTime(selectedUpdate.updated_at)}
+                      {formatRelativeTime(selectedUpdate.last_updated_at)}
                     </p>
                   </div>
                 </div>
@@ -521,7 +521,7 @@ const Updates: React.FC = () => {
                     onClick={() => {
                       // This would need a way to find the associated command ID
                       // For now, we'll show a message indicating this needs to be implemented
-                      toast.info('Retry functionality will be available in the command history view');
+                      toast('Retry functionality will be available in the command history view', { icon: 'ℹ️' });
                     }}
                     className="w-full btn btn-warning"
                   >
@@ -1295,11 +1295,11 @@ const Updates: React.FC = () => {
                   </th>
                   <th className="table-header">
                     <button
-                      onClick={() => handleSort('created_at')}
+                      onClick={() => handleSort('last_discovered_at')}
                       className="flex items-center hover:text-primary-600 font-medium"
                     >
                       Discovered
-                      {renderSortIcon('created_at')}
+                      {renderSortIcon('last_discovered_at')}
                     </button>
                   </th>
                   <th className="table-header">Actions</th>
@@ -1376,7 +1376,7 @@ const Updates: React.FC = () => {
                     </td>
                     <td className="table-cell">
                       <div className="text-sm text-gray-900">
-                        {formatRelativeTime(update.created_at)}
+                        {formatRelativeTime(update.last_discovered_at)}
                       </div>
                     </td>
                     <td className="table-cell">

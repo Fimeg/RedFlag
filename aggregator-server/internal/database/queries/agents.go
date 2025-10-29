@@ -196,3 +196,11 @@ func (q *AgentQueries) DeleteAgent(id uuid.UUID) error {
 	// Commit the transaction
 	return tx.Commit()
 }
+
+// GetActiveAgentCount returns the count of active (online) agents
+func (q *AgentQueries) GetActiveAgentCount() (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM agents WHERE status = 'online'`
+	err := q.db.Get(&count, query)
+	return count, err
+}

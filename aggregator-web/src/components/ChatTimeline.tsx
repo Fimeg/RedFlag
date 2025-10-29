@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { logApi } from '@/lib/api';
+import { useRetryCommand } from '@/hooks/useCommands';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import { Highlight, themes } from 'prism-react-renderer';
@@ -47,10 +48,79 @@ interface ChatTimelineProps {
   externalSearch?: string; // external search query from parent
 }
 
+// Helper function to create smart summaries for package operations
+const createPackageOperationSummary = (entry: HistoryEntry): string => {
+  const action = entry.action.replace(/_/g, ' ');
+  const result = entry.result || 'unknown';
+
+  // Extract package name from stdout or params
+  let packageName = 'unknown package';
+  if (entry.params?.package_name) {
+    packageName = entry.params.package_name as string;
+  } else if (entry.stdout) {
+    // Look for package patterns in stdout
+    const packageMatch = entry.stdout.match(/(?:Upgrading|Installing|Package):\s+(\S+)/i);
+    if (packageMatch) {
+      packageName = packageMatch[1];
+    } else {
+      // Look for "Packages installed: [pkg]" pattern
+      const installedMatch = entry.stdout.match(/Packages installed:\s*\[([^\]]+)\]/i);
+      if (installedMatch) {
+        packageName = installedMatch[1];
+      }
+    }
+  }
+
+  // Extract duration if available
+  let durationInfo = '';
+  if (entry.logged_at) {
+    try {
+      const loggedTime = new Date(entry.logged_at).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      durationInfo = ` at ${loggedTime}`;
+
+      if (entry.duration_seconds) {
+        durationInfo += ` (${entry.duration_seconds}s)`;
+      }
+    } catch (e) {
+      // Ignore date parsing errors
+    }
+  }
+
+  // Create action-specific summaries
+  switch (entry.action) {
+    case 'upgrade':
+    case 'install':
+    case 'confirm_dependencies':
+      if (result === 'success' || result === 'completed') {
+        return `Successfully ${action}d ${packageName}${durationInfo}`;
+      } else if (result === 'failed' || result === 'error') {
+        return `Failed to ${action} ${packageName}${durationInfo}`;
+      } else {
+        return `${action.charAt(0).toUpperCase() + action.slice(1)} ${packageName}${durationInfo}`;
+      }
+
+    case 'dry_run_update':
+      if (result === 'success' || result === 'completed') {
+        return `Dry run completed for ${packageName}${durationInfo}`;
+      } else {
+        return `Dry run for ${packageName}${durationInfo}`;
+      }
+
+    default:
+      return `${action} ${packageName}${durationInfo}`;
+  }
+};
+
 const ChatTimeline: React.FC<ChatTimelineProps> = ({ agentId, className, isScopedView = false, externalSearch }) => {
   const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'success', 'failed', 'pending', 'completed', 'running', 'timed_out'
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+
+  // Retry command hook
+  const retryCommandMutation = useRetryCommand();
 
   // Query parameters for API
   const [queryParams, setQueryParams] = useState({
@@ -440,18 +510,23 @@ const ChatTimeline: React.FC<ChatTimelineProps> = ({ agentId, className, isScope
               sentence = `System log: ${entry.action}`;
             }
           } catch {
-            const lines = entry.stdout.split('\n');
-            const firstLine = lines[0]?.trim();
-            // Clean up common prefixes for more elegant system thoughts
-            if (firstLine) {
-              sentence = firstLine
-                .replace(/^(INFO|WARN|ERROR|DEBUG):\s*/i, '')
-                .replace(/^Step \d+:\s*/i, '')
-                .replace(/^Command:\s*/i, '')
-                .replace(/^Output:\s*/i, '')
-                .trim() || `System log: ${entry.action}`;
+            // Create smart summary for package management operations
+            if (['upgrade', 'install', 'confirm_dependencies', 'dry_run_update'].includes(entry.action)) {
+              sentence = createPackageOperationSummary(entry);
             } else {
-              sentence = `System log: ${entry.action}`;
+              const lines = entry.stdout.split('\n');
+              const firstLine = lines[0]?.trim();
+              // Clean up common prefixes for more elegant system thoughts
+              if (firstLine) {
+                sentence = firstLine
+                  .replace(/^(INFO|WARN|ERROR|DEBUG):\s*/i, '')
+                  .replace(/^Step \d+:\s*/i, '')
+                  .replace(/^Command:\s*/i, '')
+                  .replace(/^Output:\s*/i, '')
+                  .trim() || `System log: ${entry.action}`;
+              } else {
+                sentence = `System log: ${entry.action}`;
+              }
             }
           }
         } else {
@@ -564,8 +639,8 @@ const ChatTimeline: React.FC<ChatTimelineProps> = ({ agentId, className, isScope
                 )}
                 {narrative.statusType === 'pending' && (
                   <>
-                    <Clock className="h-3 w-3 text-purple-600" />
-                    <span className="font-mono text-xs bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded">
+                    <Clock className="h-3 w-3 text-amber-600" />
+                    <span className="font-mono text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
                       PENDING
                     </span>
                   </>
@@ -862,15 +937,24 @@ const ChatTimeline: React.FC<ChatTimelineProps> = ({ agentId, className, isScope
 
                     {(entry.result === 'failed' || entry.result === 'timed_out') && (
                       <button
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          // Handle retry logic - would integrate with API
-                          toast.success(`Retry command sent to ${entry.hostname || 'agent'}`);
+                          try {
+                            await retryCommandMutation.mutateAsync(entry.id);
+                            toast.success(`Retry command sent to ${entry.hostname || 'agent'}`);
+                          } catch (error: any) {
+                            toast.error(`Failed to retry command: ${error.message || 'Unknown error'}`);
+                          }
                         }}
+                        disabled={retryCommandMutation.isPending}
                         className="inline-flex items-center px-2.5 py-1.5 bg-amber-50 text-amber-700 rounded-md hover:bg-amber-100 transition-colors font-medium"
                       >
-                        <RefreshCw className="h-3 w-3 mr-1" />
-                        Retry Command
+                        {retryCommandMutation.isPending ? (
+                          <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                        )}
+                        {retryCommandMutation.isPending ? 'Retrying...' : 'Retry Command'}
                       </button>
                     )}
                   </div>
@@ -988,10 +1072,11 @@ const ChatTimeline: React.FC<ChatTimelineProps> = ({ agentId, className, isScope
           </p>
         </div>
       ) : (
-        <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
-          <div className="space-y-4">
-            {createTimelineWithDividers(filteredEntries)}
-          </div>
+        <div className={cn(
+          isScopedView ? "bg-gray-50 rounded-lg border border-gray-200 p-4" : "",
+          "space-y-4"
+        )}>
+          {createTimelineWithDividers(filteredEntries)}
         </div>
       )}
 

@@ -47,8 +47,9 @@ export interface UpdatePackage {
   available_version: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   status: 'pending' | 'approved' | 'scheduled' | 'installing' | 'installed' | 'failed' | 'checking_dependencies' | 'pending_dependencies';
-  created_at: string;
-  updated_at: string;
+  // Timestamp fields - matching backend API response
+  last_discovered_at: string;  // When package was first discovered
+  last_updated_at: string;     // When package status was last updated
   approved_at: string | null;
   scheduled_at: string | null;
   installed_at: string | null;
@@ -285,4 +286,76 @@ export interface ApiError {
   message: string;
   code?: string;
   details?: any;
+}
+
+// Registration Token types
+export interface RegistrationToken {
+  id: string;
+  token: string;
+  label: string;
+  expires_at: string | null;
+  max_seats: number | null;
+  current_seats: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  metadata: Record<string, any>;
+}
+
+export interface CreateRegistrationTokenRequest {
+  label: string;
+  expires_at?: string;
+  max_seats?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface RegistrationTokenStats {
+  total_tokens: number;
+  active_tokens: number;
+  used_tokens: number;
+  expired_tokens: number;
+  revoked_tokens: number;
+  total_seats_used: number;
+  total_seats_available: number;
+}
+
+// Rate Limiting types
+export interface RateLimitConfig {
+  endpoint: string;
+  requests_per_minute: number;
+  window_minutes: number;
+  max_requests: number;
+  burst_allowance: number;
+  metadata: Record<string, any>;
+}
+
+export interface RateLimitStats {
+  endpoint: string;
+  current_requests: number;
+  limit: number;
+  window_start: string;
+  window_end: string;
+  blocked_requests: number;
+  top_clients: Array<{
+    identifier: string;
+    request_count: number;
+  }>;
+}
+
+export interface RateLimitUsage {
+  endpoint: string;
+  limit: number;
+  current: number;
+  remaining: number;
+  reset_time: string;
+  window_minutes: number;
+}
+
+export interface RateLimitSummary {
+  total_endpoints: number;
+  active_endpoints: number;
+  total_requests_per_minute: number;
+  most_active_endpoint: string;
+  average_utilization: number;
 }

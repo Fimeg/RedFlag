@@ -527,7 +527,8 @@ func (q *UpdateQueries) GetPackageHistory(agentID uuid.UUID, packageType, packag
 }
 
 // UpdatePackageStatus updates the status of a package and records history
-func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, packageName, status string, metadata models.JSONB) error {
+// completedAt is optional - if nil, uses time.Now(). Pass actual completion time for accurate audit trails.
+func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, packageName, status string, metadata models.JSONB, completedAt *time.Time) error {
 	tx, err := q.db.Beginx()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -542,13 +543,19 @@ func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, pack
 		return fmt.Errorf("failed to get current state: %w", err)
 	}
 
+	// Use provided timestamp or fall back to server time
+	timestamp := time.Now()
+	if completedAt != nil {
+		timestamp = *completedAt
+	}
+
 	// Update status
 	updateQuery := `
 		UPDATE current_package_state
 		SET status = $1, last_updated_at = $2
 		WHERE agent_id = $3 AND package_type = $4 AND package_name = $5
 	`
-	_, err = tx.Exec(updateQuery, status, time.Now(), agentID, packageType, packageName)
+	_, err = tx.Exec(updateQuery, status, timestamp, agentID, packageType, packageName)
 	if err != nil {
 		return fmt.Errorf("failed to update package status: %w", err)
 	}
@@ -564,7 +571,7 @@ func (q *UpdateQueries) UpdatePackageStatus(agentID uuid.UUID, packageType, pack
 		_, err = tx.Exec(historyQuery,
 			agentID, packageType, packageName, currentState.CurrentVersion,
 			currentState.AvailableVersion, currentState.Severity,
-			currentState.RepositorySource, metadata, time.Now(), status)
+			currentState.RepositorySource, metadata, timestamp, status)
 		if err != nil {
 			return fmt.Errorf("failed to record version history: %w", err)
 		}

@@ -10,6 +10,8 @@ import Docker from '@/pages/Docker';
 import LiveOperations from '@/pages/LiveOperations';
 import History from '@/pages/History';
 import Settings from '@/pages/Settings';
+import TokenManagement from '@/pages/TokenManagement';
+import RateLimiting from '@/pages/RateLimiting';
 import Login from '@/pages/Login';
 
 // Protected route component
@@ -98,6 +100,8 @@ const App: React.FC = () => {
                   <Route path="/live" element={<LiveOperations />} />
                   <Route path="/history" element={<History />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route path="/settings/tokens" element={<TokenManagement />} />
+                  <Route path="/settings/rate-limiting" element={<RateLimiting />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Layout>

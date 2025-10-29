@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,14 +17,40 @@ type UpdateHandler struct {
 	updateQueries  *queries.UpdateQueries
 	agentQueries   *queries.AgentQueries
 	commandQueries *queries.CommandQueries
+	agentHandler   *AgentHandler
 }
 
-func NewUpdateHandler(uq *queries.UpdateQueries, aq *queries.AgentQueries, cq *queries.CommandQueries) *UpdateHandler {
+func NewUpdateHandler(uq *queries.UpdateQueries, aq *queries.AgentQueries, cq *queries.CommandQueries, ah *AgentHandler) *UpdateHandler {
 	return &UpdateHandler{
 		updateQueries:  uq,
 		agentQueries:   aq,
 		commandQueries: cq,
+		agentHandler:   ah,
 	}
+}
+
+// shouldEnableHeartbeat checks if heartbeat is already active for an agent
+// Returns true if heartbeat should be enabled (i.e., not already active or expired)
+func (h *UpdateHandler) shouldEnableHeartbeat(agentID uuid.UUID, durationMinutes int) (bool, error) {
+	agent, err := h.agentQueries.GetAgentByID(agentID)
+	if err != nil {
+		log.Printf("Warning: Failed to get agent %s for heartbeat check: %v", agentID, err)
+		return true, nil // Enable heartbeat by default if we can't check
+	}
+
+	// Check if rapid polling is already enabled and not expired
+	if enabled, ok := agent.Metadata["rapid_polling_enabled"].(bool); ok && enabled {
+		if untilStr, ok := agent.Metadata["rapid_polling_until"].(string); ok {
+			until, err := time.Parse(time.RFC3339, untilStr)
+			if err == nil && until.After(time.Now().Add(5*time.Minute)) {
+				// Heartbeat is already active for sufficient time
+				log.Printf("[Heartbeat] Agent %s already has active heartbeat until %s (skipping)", agentID, untilStr)
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
 }
 
 // ReportUpdates handles update reports from agents using event sourcing
@@ -172,7 +199,7 @@ func (h *UpdateHandler) ReportLog(c *gin.Context) {
 		return
 	}
 
-	log := &models.UpdateLog{
+	logEntry := &models.UpdateLog{
 		ID:              uuid.New(),
 		AgentID:         agentID,
 		Action:          req.Action,
@@ -185,7 +212,7 @@ func (h *UpdateHandler) ReportLog(c *gin.Context) {
 	}
 
 	// Store the log entry
-	if err := h.updateQueries.CreateUpdateLog(log); err != nil {
+	if err := h.updateQueries.CreateUpdateLog(logEntry); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save log"})
 		return
 	}
@@ -207,9 +234,33 @@ func (h *UpdateHandler) ReportLog(c *gin.Context) {
 			}
 
 			// Update command status based on log result
-			if req.Result == "success" {
+			if req.Result == "success" || req.Result == "completed" {
 				if err := h.commandQueries.MarkCommandCompleted(commandID, result); err != nil {
 					fmt.Printf("Warning: Failed to mark command %s as completed: %v\n", commandID, err)
+				}
+
+				// NEW: If this was a successful confirm_dependencies command, mark the package as updated
+				command, err := h.commandQueries.GetCommandByID(commandID)
+				if err == nil && command.CommandType == models.CommandTypeConfirmDependencies {
+					// Extract package info from command params
+					if packageName, ok := command.Params["package_name"].(string); ok {
+						if packageType, ok := command.Params["package_type"].(string); ok {
+							// Extract actual completion timestamp from command result for accurate audit trail
+							var completionTime *time.Time
+							if loggedAtStr, ok := command.Result["logged_at"].(string); ok {
+								if parsed, err := time.Parse(time.RFC3339Nano, loggedAtStr); err == nil {
+									completionTime = &parsed
+								}
+							}
+
+							// Update package status to 'updated' with actual completion timestamp
+							if err := h.updateQueries.UpdatePackageStatus(agentID, packageType, packageName, "updated", nil, completionTime); err != nil {
+								log.Printf("Warning: Failed to update package status for %s/%s: %v", packageType, packageName, err)
+							} else {
+								log.Printf("✅ Package %s (%s) marked as updated after successful installation", packageName, packageType)
+							}
+						}
+					}
 				}
 			} else if req.Result == "failed" || req.Result == "dry_run_failed" {
 				if err := h.commandQueries.MarkCommandFailed(commandID, result); err != nil {
@@ -304,7 +355,7 @@ func (h *UpdateHandler) UpdatePackageStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.updateQueries.UpdatePackageStatus(agentID, req.PackageType, req.PackageName, req.Status, req.Metadata); err != nil {
+	if err := h.updateQueries.UpdatePackageStatus(agentID, req.PackageType, req.PackageName, req.Status, req.Metadata, nil); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update package status"})
 		return
 	}
@@ -395,7 +446,29 @@ func (h *UpdateHandler) InstallUpdate(c *gin.Context) {
 		CreatedAt:     time.Now(),
 	}
 
-	// Store the command in database
+	// Check if heartbeat should be enabled (avoid duplicates)
+	if shouldEnable, err := h.shouldEnableHeartbeat(update.AgentID, 10); err == nil && shouldEnable {
+		heartbeatCmd := &models.AgentCommand{
+			ID:          uuid.New(),
+			AgentID:     update.AgentID,
+			CommandType: models.CommandTypeEnableHeartbeat,
+			Params: models.JSONB{
+				"duration_minutes": 10,
+			},
+			Status:    models.CommandStatusPending,
+			CreatedAt: time.Now(),
+		}
+
+		if err := h.commandQueries.CreateCommand(heartbeatCmd); err != nil {
+			log.Printf("[Heartbeat] Warning: Failed to create heartbeat command for agent %s: %v", update.AgentID, err)
+		} else {
+			log.Printf("[Heartbeat] Command created for agent %s before dry run", update.AgentID)
+		}
+	} else {
+		log.Printf("[Heartbeat] Skipping heartbeat command for agent %s (already active)", update.AgentID)
+	}
+
+	// Store the dry run command in database
 	if err := h.commandQueries.CreateCommand(command); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create dry run command"})
 		return
@@ -478,6 +551,28 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 			CreatedAt: time.Now(),
 		}
 
+		// Check if heartbeat should be enabled (avoid duplicates)
+		if shouldEnable, err := h.shouldEnableHeartbeat(agentID, 10); err == nil && shouldEnable {
+			heartbeatCmd := &models.AgentCommand{
+				ID:          uuid.New(),
+				AgentID:     agentID,
+				CommandType: models.CommandTypeEnableHeartbeat,
+				Params: models.JSONB{
+					"duration_minutes": 10,
+				},
+				Status:    models.CommandStatusPending,
+				CreatedAt: time.Now(),
+			}
+
+			if err := h.commandQueries.CreateCommand(heartbeatCmd); err != nil {
+				log.Printf("[Heartbeat] Warning: Failed to create heartbeat command for agent %s: %v", agentID, err)
+			} else {
+				log.Printf("[Heartbeat] Command created for agent %s before installation", agentID)
+			}
+		} else {
+			log.Printf("[Heartbeat] Skipping heartbeat command for agent %s (already active)", agentID)
+		}
+
 		if err := h.commandQueries.CreateCommand(command); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create installation command"})
 			return
@@ -534,6 +629,28 @@ func (h *UpdateHandler) ConfirmDependencies(c *gin.Context) {
 		},
 		Status:       models.CommandStatusPending,
 		CreatedAt:     time.Now(),
+	}
+
+	// Check if heartbeat should be enabled (avoid duplicates)
+	if shouldEnable, err := h.shouldEnableHeartbeat(update.AgentID, 10); err == nil && shouldEnable {
+		heartbeatCmd := &models.AgentCommand{
+			ID:          uuid.New(),
+			AgentID:     update.AgentID,
+			CommandType: models.CommandTypeEnableHeartbeat,
+			Params: models.JSONB{
+				"duration_minutes": 10,
+			},
+			Status:    models.CommandStatusPending,
+			CreatedAt: time.Now(),
+		}
+
+		if err := h.commandQueries.CreateCommand(heartbeatCmd); err != nil {
+			log.Printf("[Heartbeat] Warning: Failed to create heartbeat command for agent %s: %v", update.AgentID, err)
+		} else {
+			log.Printf("[Heartbeat] Command created for agent %s before confirm dependencies", update.AgentID)
+		}
+	} else {
+		log.Printf("[Heartbeat] Skipping heartbeat command for agent %s (already active)", update.AgentID)
 	}
 
 	// Store the command in database
@@ -682,5 +799,62 @@ func (h *UpdateHandler) GetRecentCommands(c *gin.Context) {
 		"commands": commands,
 		"count":    len(commands),
 		"limit":    limit,
+	})
+}
+
+// ClearFailedCommands manually removes failed/timed_out commands with cheeky warning
+func (h *UpdateHandler) ClearFailedCommands(c *gin.Context) {
+	// Get query parameters for filtering
+	olderThanDaysStr := c.Query("older_than_days")
+	onlyRetriedStr := c.Query("only_retried")
+	allFailedStr := c.Query("all_failed")
+
+	var count int64
+	var err error
+
+	// Parse parameters
+	olderThanDays := 7 // default
+	if olderThanDaysStr != "" {
+		if days, err := strconv.Atoi(olderThanDaysStr); err == nil && days > 0 {
+			olderThanDays = days
+		}
+	}
+
+	onlyRetried := onlyRetriedStr == "true"
+	allFailed := allFailedStr == "true"
+
+	// Build the appropriate cleanup query based on parameters
+	if allFailed {
+		// Clear ALL failed commands (most aggressive)
+		count, err = h.commandQueries.ClearAllFailedCommands(olderThanDays)
+	} else if onlyRetried {
+		// Clear only failed commands that have been retried
+		count, err = h.commandQueries.ClearRetriedFailedCommands(olderThanDays)
+	} else {
+		// Clear failed commands older than specified days (default behavior)
+		count, err = h.commandQueries.ClearOldFailedCommands(olderThanDays)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to clear failed commands",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Return success with cheeky message
+	message := fmt.Sprintf("Archived %d failed commands", count)
+	if count > 0 {
+		message += ". WARNING: This shouldn't be necessary if the retry logic is working properly - you might want to check what's causing commands to fail in the first place!"
+		message += " (History preserved - commands moved to archived status)"
+	} else {
+		message += ". No failed commands found matching your criteria. SUCCESS!"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": message,
+		"count":   count,
+		"cheeky_warning": "Consider this a developer experience enhancement - the system should clean up after itself automatically!",
 	})
 }

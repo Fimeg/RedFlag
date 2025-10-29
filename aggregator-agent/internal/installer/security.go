@@ -23,6 +23,7 @@ var AllowedCommands = map[string][]string{
 	},
 	"dnf": {
 		"refresh",
+		"makecache",
 		"install",
 		"upgrade",
 	},
@@ -93,6 +94,9 @@ func (e *SecureCommandExecutor) validateDNFCommand(args []string) error {
 		if !contains(args, "-y") {
 			return fmt.Errorf("dnf refresh must include -y flag")
 		}
+	case "makecache":
+		// makecache doesn't require -y flag as it's read-only
+		return nil
 	case "install":
 		// Allow dry-run flags for dependency checking
 		dryRunFlags := []string{"--assumeno", "--downloadonly"}
@@ -165,12 +169,22 @@ func (e *SecureCommandExecutor) ExecuteCommand(baseCmd string, args []string) (*
 		}, fmt.Errorf("command validation failed: %w", err)
 	}
 
-	// Log the command for audit purposes (in a real implementation, this would go to a secure log)
-	fmt.Printf("[AUDIT] Executing command: %s %s\n", baseCmd, strings.Join(args, " "))
+	// Resolve the full path to the command (required for sudo to match sudoers rules)
+	fullPath, err := exec.LookPath(baseCmd)
+	if err != nil {
+		return &InstallResult{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("Command not found: %s", baseCmd),
+		}, fmt.Errorf("command not found: %w", err)
+	}
 
-	// Execute the command without sudo - it will be handled by sudoers
-	fullArgs := append([]string{baseCmd}, args...)
-	cmd := exec.Command(fullArgs[0], fullArgs[1:]...)
+	// Log the command for audit purposes (in a real implementation, this would go to a secure log)
+	fmt.Printf("[AUDIT] Executing command: sudo %s %s\n", fullPath, strings.Join(args, " "))
+
+	// Execute the command with sudo - requires sudoers configuration
+	// Use full path to match sudoers rules exactly
+	fullArgs := append([]string{fullPath}, args...)
+	cmd := exec.Command("sudo", fullArgs...)
 
 	output, err := cmd.CombinedOutput()
 

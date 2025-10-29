@@ -378,7 +378,7 @@ func (h *DockerHandler) RejectUpdate(c *gin.Context) {
 	}
 
 	// For now, we'll mark as rejected (this would need a proper reject method in queries)
-	if err := h.updateQueries.UpdatePackageStatus(update.AgentID, "docker", update.PackageName, "rejected", nil); err != nil {
+	if err := h.updateQueries.UpdatePackageStatus(update.AgentID, "docker", update.PackageName, "rejected", nil, nil); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reject Docker update"})
 		return
 	}

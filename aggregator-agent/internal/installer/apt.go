@@ -146,6 +146,36 @@ func (i *APTInstaller) Upgrade() (*InstallResult, error) {
 	}, nil
 }
 
+// UpdatePackage updates a specific package using APT
+func (i *APTInstaller) UpdatePackage(packageName string) (*InstallResult, error) {
+	startTime := time.Now()
+
+	// Update specific package using secure executor
+	updateResult, err := i.executor.ExecuteCommand("apt-get", []string{"install", "--only-upgrade", "-y", packageName})
+	duration := int(time.Since(startTime).Seconds())
+
+	if err != nil {
+		return &InstallResult{
+			Success:        false,
+			ErrorMessage:   fmt.Sprintf("APT update failed: %v", err),
+			Stdout:         updateResult.Stdout,
+			Stderr:         updateResult.Stderr,
+			ExitCode:       updateResult.ExitCode,
+			DurationSeconds: duration,
+		}, err
+	}
+
+	return &InstallResult{
+		Success:        true,
+		Stdout:         updateResult.Stdout,
+		Stderr:         updateResult.Stderr,
+		ExitCode:       updateResult.ExitCode,
+		DurationSeconds: duration,
+		PackagesInstalled: []string{packageName},
+		Action:         "update",
+	}, nil
+}
+
 // DryRun performs a dry run installation to check dependencies
 func (i *APTInstaller) DryRun(packageName string) (*InstallResult, error) {
 	startTime := time.Now()

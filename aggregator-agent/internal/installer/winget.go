@@ -372,3 +372,9 @@ type WingetPackage struct {
 	IsPinned       bool   `json:"IsPinned"`
 	PinReason      string `json:"PinReason,omitempty"`
 }
+
+// UpdatePackage updates a specific winget package (alias for Install method)
+func (i *WingetInstaller) UpdatePackage(packageName string) (*InstallResult, error) {
+	// Winget uses same logic for updating as installing
+	return i.Install(packageName)
+}

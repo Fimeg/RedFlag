@@ -21,9 +21,9 @@ func NewCommandQueries(db *sqlx.DB) *CommandQueries {
 func (q *CommandQueries) CreateCommand(cmd *models.AgentCommand) error {
 	query := `
 		INSERT INTO agent_commands (
-			id, agent_id, command_type, params, status
+			id, agent_id, command_type, params, status, retried_from_id
 		) VALUES (
-			:id, :agent_id, :command_type, :params, :status
+			:id, :agent_id, :command_type, :params, :status, :retried_from_id
 		)
 	`
 	_, err := q.db.NamedExec(query, cmd)
@@ -152,14 +152,15 @@ func (q *CommandQueries) RetryCommand(originalID uuid.UUID) (*models.AgentComman
 		return nil, fmt.Errorf("command must be failed, timed_out, or cancelled to retry")
 	}
 
-	// Create new command with same parameters
+	// Create new command with same parameters, linking it to the original
 	newCommand := &models.AgentCommand{
-		ID:          uuid.New(),
-		AgentID:     original.AgentID,
-		CommandType: original.CommandType,
-		Params:      original.Params,
-		Status:      models.CommandStatusPending,
-		CreatedAt:   time.Now(),
+		ID:            uuid.New(),
+		AgentID:       original.AgentID,
+		CommandType:   original.CommandType,
+		Params:        original.Params,
+		Status:        models.CommandStatusPending,
+		CreatedAt:     time.Now(),
+		RetriedFromID: &originalID,
 	}
 
 	// Store the new command
@@ -180,20 +181,44 @@ func (q *CommandQueries) GetActiveCommands() ([]models.ActiveCommandInfo, error)
 			c.id,
 			c.agent_id,
 			c.command_type,
+			c.params,
 			c.status,
 			c.created_at,
 			c.sent_at,
 			c.result,
+			c.retried_from_id,
 			a.hostname as agent_hostname,
 			COALESCE(ups.package_name, 'N/A') as package_name,
-			COALESCE(ups.package_type, 'N/A') as package_type
+			COALESCE(ups.package_type, 'N/A') as package_type,
+			(c.retried_from_id IS NOT NULL) as is_retry,
+			EXISTS(SELECT 1 FROM agent_commands WHERE retried_from_id = c.id) as has_been_retried,
+			COALESCE((
+				WITH RECURSIVE retry_chain AS (
+					SELECT id, retried_from_id, 1 as depth
+					FROM agent_commands
+					WHERE id = c.id
+					UNION ALL
+					SELECT ac.id, ac.retried_from_id, rc.depth + 1
+					FROM agent_commands ac
+					JOIN retry_chain rc ON ac.id = rc.retried_from_id
+				)
+				SELECT MAX(depth) FROM retry_chain
+			), 1) - 1 as retry_count
 		FROM agent_commands c
 		LEFT JOIN agents a ON c.agent_id = a.id
 		LEFT JOIN current_package_state ups ON (
 			c.params->>'update_id' = ups.id::text OR
 			(c.params->>'package_name' = ups.package_name AND c.params->>'package_type' = ups.package_type)
 		)
-		WHERE c.status NOT IN ('completed', 'cancelled')
+		WHERE c.status NOT IN ('completed', 'cancelled', 'archived_failed')
+		AND NOT (
+			c.status IN ('failed', 'timed_out')
+			AND EXISTS (
+				SELECT 1 FROM agent_commands retry
+				WHERE retry.retried_from_id = c.id
+				AND retry.status = 'completed'
+			)
+		)
 		ORDER BY c.created_at DESC
 	`
 
@@ -223,9 +248,24 @@ func (q *CommandQueries) GetRecentCommands(limit int) ([]models.ActiveCommandInf
 			c.sent_at,
 			c.completed_at,
 			c.result,
+			c.retried_from_id,
 			a.hostname as agent_hostname,
 			COALESCE(ups.package_name, 'N/A') as package_name,
-			COALESCE(ups.package_type, 'N/A') as package_type
+			COALESCE(ups.package_type, 'N/A') as package_type,
+			(c.retried_from_id IS NOT NULL) as is_retry,
+			EXISTS(SELECT 1 FROM agent_commands WHERE retried_from_id = c.id) as has_been_retried,
+			COALESCE((
+				WITH RECURSIVE retry_chain AS (
+					SELECT id, retried_from_id, 1 as depth
+					FROM agent_commands
+					WHERE id = c.id
+					UNION ALL
+					SELECT ac.id, ac.retried_from_id, rc.depth + 1
+					FROM agent_commands ac
+					JOIN retry_chain rc ON ac.id = rc.retried_from_id
+				)
+				SELECT MAX(depth) FROM retry_chain
+			), 1) - 1 as retry_count
 		FROM agent_commands c
 		LEFT JOIN agents a ON c.agent_id = a.id
 		LEFT JOIN current_package_state ups ON (
@@ -242,4 +282,56 @@ func (q *CommandQueries) GetRecentCommands(limit int) ([]models.ActiveCommandInf
 	}
 
 	return commands, nil
+}
+
+// ClearOldFailedCommands archives failed commands older than specified days by changing status to 'archived_failed'
+func (q *CommandQueries) ClearOldFailedCommands(days int) (int64, error) {
+	query := fmt.Sprintf(`
+		UPDATE agent_commands
+		SET status = 'archived_failed'
+		WHERE status IN ('failed', 'timed_out')
+		AND created_at < NOW() - INTERVAL '%d days'
+	`, days)
+
+	result, err := q.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to archive old failed commands: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
+// ClearRetriedFailedCommands archives failed commands that have been retried and are older than specified days
+func (q *CommandQueries) ClearRetriedFailedCommands(days int) (int64, error) {
+	query := fmt.Sprintf(`
+		UPDATE agent_commands
+		SET status = 'archived_failed'
+		WHERE status IN ('failed', 'timed_out')
+		AND EXISTS (SELECT 1 FROM agent_commands WHERE retried_from_id = agent_commands.id)
+		AND created_at < NOW() - INTERVAL '%d days'
+	`, days)
+
+	result, err := q.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to archive retried failed commands: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
+// ClearAllFailedCommands archives all failed commands older than specified days (most aggressive)
+func (q *CommandQueries) ClearAllFailedCommands(days int) (int64, error) {
+	query := fmt.Sprintf(`
+		UPDATE agent_commands
+		SET status = 'archived_failed'
+		WHERE status IN ('failed', 'timed_out')
+		AND created_at < NOW() - INTERVAL '%d days'
+	`, days)
+
+	result, err := q.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to archive all failed commands: %w", err)
+	}
+
+	return result.RowsAffected()
 }

@@ -117,6 +117,12 @@ func (i *WindowsUpdateInstaller) installViaPowerShell(packageNames []string) (st
 	return "Windows Updates installed via PowerShell", nil
 }
 
+// UpdatePackage updates a specific Windows update (alias for Install method)
+func (i *WindowsUpdateInstaller) UpdatePackage(packageName string) (*InstallResult, error) {
+	// Windows uses same logic for updating as installing
+	return i.Install(packageName)
+}
+
 // installViaWuauclt uses traditional Windows Update client
 func (i *WindowsUpdateInstaller) installViaWuauclt(packageNames []string) (string, error) {
 	// Force detection of updates
