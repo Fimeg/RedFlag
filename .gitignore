@@ -273,7 +273,6 @@ dev/
 # Development packages and scripts
 aggregator-agent/pkg/
 aggregator-server/scripts/
-aggregator-server/internal/utils/
 
 # Build artifacts
 *.tar.gz
