@@ -48,10 +48,12 @@ api.interceptors.request.use((config) => {
 // Response interceptor to handle errors
 api.interceptors.response.use(
   (response: AxiosResponse) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
-      // Clear token and redirect to login
+      const { useAuthStore } = await import('./store');
+      useAuthStore.getState().logout();
       localStorage.removeItem('auth_token');
+      localStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);
