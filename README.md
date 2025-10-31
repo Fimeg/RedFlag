@@ -37,8 +37,8 @@ RedFlag lets you manage software updates across all your servers from one dashbo
 |-----------|---------------|-------------------|
 | ![Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png) | ![Linux Agent](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Updates](Screenshots/RedFlag%20Updates%20Dashboard.png) |
 
-| Windows Update History | History Tracking | Docker Integration |
-|------------------------|------------------|-------------------|
+| Live Operations | History Tracking | Docker Integration |
+|-----------------|------------------|-------------------|
 | ![Live Ops](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png) | ![History](Screenshots/RedFlag%20History%20Dashboard.png) | ![Docker](Screenshots/RedFlag%20Docker%20Dashboard.png) |
 
 <details>
