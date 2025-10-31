@@ -2,7 +2,6 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -123,12 +122,6 @@ func getEnv(key, defaultValue string) string {
 }
 
 
-func deriveJWTSecret(username, password string) string {
-	// Derive JWT secret from admin credentials
-	// This ensures JWT secret changes if admin password changes
-	hash := sha256.Sum256([]byte(username + password + "redflag-jwt-2024"))
-	return hex.EncodeToString(hash[:])
-}
 
 // GenerateSecureToken generates a cryptographically secure random token
 func GenerateSecureToken() (string, error) {

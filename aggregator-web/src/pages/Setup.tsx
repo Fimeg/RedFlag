@@ -21,8 +21,7 @@ const Setup: React.FC = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [jwtSecret, setJwtSecret] = useState<string | null>(null);
-  const [envContent, setEnvContent] = useState<string | null>(null);
+    const [envContent, setEnvContent] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showDbPassword, setShowDbPassword] = useState(false);
@@ -112,8 +111,7 @@ const Setup: React.FC = () => {
     try {
       const result = await setupApi.configure(formData);
 
-      // Store JWT secret, env content and show success screen
-      setJwtSecret(result.jwtSecret || null);
+      // Store env content and show success screen
       setEnvContent(result.envContent || null);
       setShowSuccess(true);
       toast.success(result.message || 'Configuration saved successfully!');
@@ -128,8 +126,8 @@ const Setup: React.FC = () => {
     }
   };
 
-  // Success screen with credentials display
-  if (showSuccess && jwtSecret) {
+  // Success screen with configuration display
+  if (showSuccess && envContent) {
     return (
       <div className="px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mx-auto">
@@ -200,28 +198,7 @@ const Setup: React.FC = () => {
               </div>
             )}
 
-            {/* JWT Secret Section (Server Configuration) */}
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-3">Server JWT Secret</h3>
-              <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
-                <code className="text-sm text-gray-800 break-all font-mono">{jwtSecret}</code>
-              </div>
-              <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-md">
-                <p className="text-sm text-gray-700">
-                  <strong>For your information:</strong> This JWT secret is used internally by the server for session management and agent authentication. It's automatically included in the configuration file above.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(jwtSecret);
-                  toast.success('JWT secret copied to clipboard!');
-                }}
-                className="mt-3 w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-              >
-                Copy JWT Secret (Optional)
-              </button>
-            </div>
-
+            
             {/* Next Steps */}
             <div className="border-t border-gray-200 pt-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-3">Next Steps</h3>

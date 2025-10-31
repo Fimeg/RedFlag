@@ -1,13 +1,12 @@
 package handlers
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
 
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
 	_ "github.com/lib/pq"
@@ -374,8 +373,12 @@ func (h *SetupHandler) ConfigureServer(c *gin.Context) {
 		return
 	}
 
-	// Generate JWT secret for display (not logged for security)
-	jwtSecret := deriveJWTSecret(req.AdminUser, req.AdminPass)
+	// Generate secure JWT secret (not derived from credentials for security)
+	jwtSecret, err := config.GenerateSecureToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate JWT secret"})
+		return
+	}
 
 	// Step 1: Update PostgreSQL password from bootstrap to user password
 	fmt.Println("Updating PostgreSQL password from bootstrap to user-provided password...")
@@ -398,7 +401,6 @@ func (h *SetupHandler) ConfigureServer(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Configuration generated successfully!",
-		"jwtSecret": jwtSecret,
 		"envContent": newEnvContent,
 		"restartMessage": "Please replace the bootstrap environment variables with the newly generated ones, then run: docker-compose down && docker-compose up -d",
 		"manualRestartRequired": true,
@@ -407,8 +409,3 @@ func (h *SetupHandler) ConfigureServer(c *gin.Context) {
 	})
 }
 
-// deriveJWTSecret generates a JWT secret from admin credentials
-func deriveJWTSecret(username, password string) string {
-	hash := sha256.Sum256([]byte(username + password + "redflag-jwt-2024"))
-	return hex.EncodeToString(hash[:])
-}

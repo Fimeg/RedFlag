@@ -7,6 +7,7 @@ interface SetupCompletionCheckerProps {
 }
 
 export const SetupCompletionChecker: React.FC<SetupCompletionCheckerProps> = ({ children }) => {
+  const [wasInSetupMode, setWasInSetupMode] = useState(false);
   const [isSetupMode, setIsSetupMode] = useState<boolean | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -16,13 +17,28 @@ export const SetupCompletionChecker: React.FC<SetupCompletionCheckerProps> = ({ 
       try {
         const data = await setupApi.checkHealth();
 
-        if (data.status === 'waiting for configuration') {
-          setIsSetupMode(true);
-        } else {
-          setIsSetupMode(false);
+        const currentSetupMode = data.status === 'waiting for configuration';
+
+        // Track if we were previously in setup mode
+        if (currentSetupMode) {
+          setWasInSetupMode(true);
         }
+
+        // If we were in setup mode and now we're not, redirect to login
+        if (wasInSetupMode && !currentSetupMode && location.pathname === '/setup') {
+          console.log('Setup completed - redirecting to login');
+          navigate('/login', { replace: true });
+          return; // Prevent further state updates
+        }
+
+        setIsSetupMode(currentSetupMode);
       } catch (error) {
         // If we can't reach the health endpoint, assume normal mode
+        if (wasInSetupMode && location.pathname === '/setup') {
+          console.log('Setup completed (endpoint reachable) - redirecting to login');
+          navigate('/login', { replace: true });
+          return;
+        }
         setIsSetupMode(false);
       }
     };
@@ -33,15 +49,7 @@ export const SetupCompletionChecker: React.FC<SetupCompletionCheckerProps> = ({ 
     const interval = setInterval(checkSetupStatus, 3000);
 
     return () => clearInterval(interval);
-  }, []);
-
-  // If we're on the setup page and server is now healthy, redirect to login
-  useEffect(() => {
-    if (isSetupMode === false && location.pathname === '/setup') {
-      console.log('Setup completed - redirecting to login');
-      navigate('/login', { replace: true });
-    }
-  }, [isSetupMode, location.pathname, navigate]);
+  }, [wasInSetupMode, location.pathname, navigate]);
 
   // Always render children - this component only handles redirects
   return <>{children}</>;
