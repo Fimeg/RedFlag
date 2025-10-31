@@ -35,15 +35,10 @@ func startWelcomeModeServer() {
 	router.GET("/", setupHandler.ShowSetupPage)
 
 	// Setup endpoint for web configuration
-	router.POST("/api/v1/setup", setupHandler.ConfigureServer)
+	router.POST("/api/setup/configure", setupHandler.ConfigureServer)
 
-	// Setup endpoint for web configuration (future)
-	router.GET("/setup", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message": "Web setup coming soon",
-			"instructions": "Use: docker-compose exec server ./redflag-server --setup",
-		})
-	})
+	// Setup endpoint for web configuration
+	router.GET("/setup", setupHandler.ShowSetupPage)
 
 	log.Printf("Welcome mode server started on :8080")
 	log.Printf("Waiting for configuration...")
@@ -127,6 +122,14 @@ func main() {
 	commandQueries := queries.NewCommandQueries(db.DB)
 	refreshTokenQueries := queries.NewRefreshTokenQueries(db.DB)
 	registrationTokenQueries := queries.NewRegistrationTokenQueries(db.DB)
+	userQueries := queries.NewUserQueries(db.DB)
+
+	// Ensure admin user exists
+	if err := userQueries.EnsureAdminUser(cfg.Admin.Username, cfg.Admin.Username+"@redflag.local", cfg.Admin.Password); err != nil {
+		fmt.Printf("Warning: Failed to create admin user: %v\n", err)
+	} else {
+		fmt.Println("✅ Admin user ensured")
+	}
 
 	// Initialize services
 	timezoneService := services.NewTimezoneService(cfg)
@@ -136,15 +139,15 @@ func main() {
 	rateLimiter := middleware.NewRateLimiter()
 
 	// Initialize handlers
-	agentHandler := handlers.NewAgentHandler(agentQueries, commandQueries, refreshTokenQueries, cfg.CheckInInterval, cfg.LatestAgentVersion)
+	agentHandler := handlers.NewAgentHandler(agentQueries, commandQueries, refreshTokenQueries, registrationTokenQueries, cfg.CheckInInterval, cfg.LatestAgentVersion)
 	updateHandler := handlers.NewUpdateHandler(updateQueries, agentQueries, commandQueries, agentHandler)
-	authHandler := handlers.NewAuthHandler(cfg.Admin.JWTSecret)
+	authHandler := handlers.NewAuthHandler(cfg.Admin.JWTSecret, userQueries)
 	statsHandler := handlers.NewStatsHandler(agentQueries, updateQueries)
 	settingsHandler := handlers.NewSettingsHandler(timezoneService)
 	dockerHandler := handlers.NewDockerHandler(updateQueries, agentQueries, commandQueries)
 	registrationTokenHandler := handlers.NewRegistrationTokenHandler(registrationTokenQueries, agentQueries, cfg)
 	rateLimitHandler := handlers.NewRateLimitHandler(rateLimiter)
-	downloadHandler := handlers.NewDownloadHandler(filepath.Join(".", "redflag-agent"))
+	downloadHandler := handlers.NewDownloadHandler(filepath.Join("/app"), cfg)
 
 	// Setup router
 	router := gin.Default()
@@ -168,6 +171,10 @@ func main() {
 		// Public routes (no authentication required, with rate limiting)
 		api.POST("/agents/register", rateLimiter.RateLimit("agent_registration", middleware.KeyByIP), agentHandler.RegisterAgent)
 		api.POST("/agents/renew", rateLimiter.RateLimit("public_access", middleware.KeyByIP), agentHandler.RenewToken)
+
+		// Public download routes (no authentication - agents need these!)
+		api.GET("/downloads/:platform", rateLimiter.RateLimit("public_access", middleware.KeyByIP), downloadHandler.DownloadAgent)
+		api.GET("/install/:platform", rateLimiter.RateLimit("public_access", middleware.KeyByIP), downloadHandler.InstallScript)
 
 		// Protected agent routes
 		agents := api.Group("/agents")
@@ -225,10 +232,6 @@ func main() {
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/reject", dockerHandler.RejectUpdate)
 			dashboard.POST("/docker/containers/:container_id/images/:image_id/install", dockerHandler.InstallUpdate)
 
-			// Download routes (authenticated)
-			dashboard.GET("/downloads/:platform", downloadHandler.DownloadAgent)
-			dashboard.GET("/install/:platform", downloadHandler.InstallScript)
-
 			// Admin/Registration Token routes (for agent enrollment management)
 			admin := dashboard.Group("/admin")
 			{
@@ -236,6 +239,7 @@ func main() {
 				admin.GET("/registration-tokens", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.ListRegistrationTokens)
 				admin.GET("/registration-tokens/active", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.GetActiveRegistrationTokens)
 				admin.DELETE("/registration-tokens/:token", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.RevokeRegistrationToken)
+				admin.DELETE("/registration-tokens/delete/:id", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.DeleteRegistrationToken)
 				admin.POST("/registration-tokens/cleanup", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.CleanupExpiredTokens)
 				admin.GET("/registration-tokens/stats", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.GetTokenStats)
 				admin.GET("/registration-tokens/validate", rateLimiter.RateLimit("admin_operations", middleware.KeyByUserID), registrationTokenHandler.ValidateRegistrationToken)

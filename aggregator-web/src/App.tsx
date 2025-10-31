@@ -12,6 +12,7 @@ import History from '@/pages/History';
 import Settings from '@/pages/Settings';
 import TokenManagement from '@/pages/TokenManagement';
 import RateLimiting from '@/pages/RateLimiting';
+import AgentManagement from '@/pages/settings/AgentManagement';
 import Login from '@/pages/Login';
 import Setup from '@/pages/Setup';
 import { WelcomeChecker } from '@/components/WelcomeChecker';
@@ -108,6 +109,7 @@ const App: React.FC = () => {
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/settings/tokens" element={<TokenManagement />} />
                     <Route path="/settings/rate-limiting" element={<RateLimiting />} />
+                    <Route path="/settings/agents" element={<AgentManagement />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Layout>

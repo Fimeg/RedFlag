@@ -35,8 +35,18 @@ func Connect(databaseURL string) (*DB, error) {
 	return &DB{db}, nil
 }
 
-// Migrate runs database migrations
+// Migrate runs database migrations with proper tracking
 func (db *DB) Migrate(migrationsPath string) error {
+	// Create migrations table if it doesn't exist
+	createTableSQL := `
+	CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)`
+	if _, err := db.Exec(createTableSQL); err != nil {
+		return fmt.Errorf("failed to create migrations table: %w", err)
+	}
+
 	// Read migration files
 	files, err := os.ReadDir(migrationsPath)
 	if err != nil {
@@ -52,16 +62,65 @@ func (db *DB) Migrate(migrationsPath string) error {
 	}
 	sort.Strings(migrationFiles)
 
-	// Execute migrations
+	// Execute migrations that haven't been applied yet
 	for _, filename := range migrationFiles {
+		// Check if migration has already been applied
+		var count int
+		err := db.Get(&count, "SELECT COUNT(*) FROM schema_migrations WHERE version = $1", filename)
+		if err != nil {
+			return fmt.Errorf("failed to check migration status for %s: %w", filename, err)
+		}
+
+		if count > 0 {
+			fmt.Printf("→ Skipping migration (already applied): %s\n", filename)
+			continue
+		}
+
+		// Read migration file
 		path := filepath.Join(migrationsPath, filename)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read migration %s: %w", filename, err)
 		}
 
-		if _, err := db.Exec(string(content)); err != nil {
+		// Execute migration in a transaction
+		tx, err := db.Beginx()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction for migration %s: %w", filename, err)
+		}
+
+		// Execute the migration SQL
+		if _, err := tx.Exec(string(content)); err != nil {
+			// Check if it's a "already exists" error - if so, handle gracefully
+			if strings.Contains(err.Error(), "already exists") ||
+			   strings.Contains(err.Error(), "duplicate key") ||
+			   strings.Contains(err.Error(), "relation") && strings.Contains(err.Error(), "already exists") {
+				fmt.Printf("⚠ Migration %s failed (objects already exist), marking as applied: %v\n", filename, err)
+				// Rollback current transaction and start a new one for tracking
+				tx.Rollback()
+				// Start new transaction just for migration tracking
+				if newTx, newTxErr := db.Beginx(); newTxErr == nil {
+					if _, insertErr := newTx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", filename); insertErr == nil {
+						newTx.Commit()
+					} else {
+						newTx.Rollback()
+					}
+				}
+				continue
+			}
+			tx.Rollback()
 			return fmt.Errorf("failed to execute migration %s: %w", filename, err)
+		}
+
+		// Record the migration as applied
+		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", filename); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to record migration %s: %w", filename, err)
+		}
+
+		// Commit the transaction
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", filename, err)
 		}
 
 		fmt.Printf("✓ Executed migration: %s\n", filename)

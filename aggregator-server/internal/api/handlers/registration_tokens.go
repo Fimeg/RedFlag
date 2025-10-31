@@ -8,6 +8,7 @@ import (
 	"github.com/Fimeg/RedFlag/aggregator-server/internal/config"
 	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type RegistrationTokenHandler struct {
@@ -29,6 +30,7 @@ func (h *RegistrationTokenHandler) GenerateRegistrationToken(c *gin.Context) {
 	var request struct {
 		Label     string                 `json:"label" binding:"required"`
 		ExpiresIn string                 `json:"expires_in"` // e.g., "24h", "7d", "168h"
+		MaxSeats  int                    `json:"max_seats"`  // Number of agents that can use this token
 		Metadata  map[string]interface{} `json:"metadata"`
 	}
 
@@ -86,8 +88,14 @@ func (h *RegistrationTokenHandler) GenerateRegistrationToken(c *gin.Context) {
 	metadata["server_url"] = c.Request.Host
 	metadata["expires_in"] = expiresIn
 
+	// Default max_seats to 1 if not provided or invalid
+	maxSeats := request.MaxSeats
+	if maxSeats < 1 {
+		maxSeats = 1
+	}
+
 	// Store token in database
-	err = h.tokenQueries.CreateRegistrationToken(token, request.Label, expiresAt, metadata)
+	err = h.tokenQueries.CreateRegistrationToken(token, request.Label, expiresAt, maxSeats, metadata)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create token"})
 		return
@@ -117,6 +125,7 @@ func (h *RegistrationTokenHandler) ListRegistrationTokens(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	status := c.Query("status")
+	isActive := c.Query("is_active") == "true"
 
 	// Validate pagination
 	if limit > 100 {
@@ -131,10 +140,26 @@ func (h *RegistrationTokenHandler) ListRegistrationTokens(c *gin.Context) {
 	var tokens []queries.RegistrationToken
 	var err error
 
-	if status != "" {
-		// TODO: Add filtered queries by status
-		tokens, err = h.tokenQueries.GetAllRegistrationTokens(limit, offset)
+	// Handle filtering by active status
+	if isActive || status == "active" {
+		// Get only active tokens (no pagination for active-only queries)
+		tokens, err = h.tokenQueries.GetActiveRegistrationTokens()
+
+		// Apply manual pagination to active tokens if needed
+		if err == nil && len(tokens) > 0 {
+			start := offset
+			end := offset + limit
+			if start >= len(tokens) {
+				tokens = []queries.RegistrationToken{}
+			} else {
+				if end > len(tokens) {
+					end = len(tokens)
+				}
+				tokens = tokens[start:end]
+			}
+		}
 	} else {
+		// Get all tokens with database-level pagination
 		tokens, err = h.tokenQueries.GetAllRegistrationTokens(limit, offset)
 	}
 
@@ -211,6 +236,34 @@ func (h *RegistrationTokenHandler) RevokeRegistrationToken(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Token revoked successfully"})
+}
+
+// DeleteRegistrationToken permanently deletes a registration token
+func (h *RegistrationTokenHandler) DeleteRegistrationToken(c *gin.Context) {
+	tokenID := c.Param("id")
+	if tokenID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID is required"})
+		return
+	}
+
+	// Parse UUID
+	id, err := uuid.Parse(tokenID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid token ID format"})
+		return
+	}
+
+	err = h.tokenQueries.DeleteRegistrationToken(id)
+	if err != nil {
+		if err.Error() == "token not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Token not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete token"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Token deleted successfully"})
 }
 
 // ValidateRegistrationToken checks if a token is valid (for testing/debugging)

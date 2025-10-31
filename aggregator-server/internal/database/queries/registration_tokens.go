@@ -27,12 +27,15 @@ type RegistrationToken struct {
 	RevokedReason *string       `json:"revoked_reason" db:"revoked_reason"`
 	Status       string         `json:"status" db:"status"`
 	CreatedBy    string         `json:"created_by" db:"created_by"`
-	Metadata     map[string]interface{} `json:"metadata" db:"metadata"`
+	Metadata     json.RawMessage `json:"metadata" db:"metadata"`
+	MaxSeats     int            `json:"max_seats" db:"max_seats"`
+	SeatsUsed    int            `json:"seats_used" db:"seats_used"`
 }
 
 type TokenRequest struct {
 	Label      string                 `json:"label"`
 	ExpiresIn  string                 `json:"expires_in"` // e.g., "24h", "7d"
+	MaxSeats   int                    `json:"max_seats"`  // Number of agents that can use this token (default: 1)
 	Metadata   map[string]interface{} `json:"metadata"`
 }
 
@@ -47,19 +50,24 @@ func NewRegistrationTokenQueries(db *sqlx.DB) *RegistrationTokenQueries {
 	return &RegistrationTokenQueries{db: db}
 }
 
-// CreateRegistrationToken creates a new one-time use registration token
-func (q *RegistrationTokenQueries) CreateRegistrationToken(token, label string, expiresAt time.Time, metadata map[string]interface{}) error {
+// CreateRegistrationToken creates a new registration token with seat tracking
+func (q *RegistrationTokenQueries) CreateRegistrationToken(token, label string, expiresAt time.Time, maxSeats int, metadata map[string]interface{}) error {
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
+	// Ensure maxSeats is at least 1
+	if maxSeats < 1 {
+		maxSeats = 1
+	}
+
 	query := `
-		INSERT INTO registration_tokens (token, label, expires_at, metadata)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO registration_tokens (token, label, expires_at, max_seats, metadata)
+		VALUES ($1, $2, $3, $4, $5)
 	`
 
-	_, err = q.db.Exec(query, token, label, expiresAt, metadataJSON)
+	_, err = q.db.Exec(query, token, label, expiresAt, maxSeats, metadataJSON)
 	if err != nil {
 		return fmt.Errorf("failed to create registration token: %w", err)
 	}
@@ -67,20 +75,21 @@ func (q *RegistrationTokenQueries) CreateRegistrationToken(token, label string, 
 	return nil
 }
 
-// ValidateRegistrationToken checks if a token is valid and unused
+// ValidateRegistrationToken checks if a token is valid and has available seats
 func (q *RegistrationTokenQueries) ValidateRegistrationToken(token string) (*RegistrationToken, error) {
 	var regToken RegistrationToken
 	query := `
 		SELECT id, token, label, expires_at, created_at, used_at, used_by_agent_id,
-			   revoked, revoked_at, revoked_reason, status, created_by, metadata
+			   revoked, revoked_at, revoked_reason, status, created_by, metadata,
+			   max_seats, seats_used
 		FROM registration_tokens
-		WHERE token = $1 AND status = 'active' AND expires_at > NOW()
+		WHERE token = $1 AND status = 'active' AND expires_at > NOW() AND seats_used < max_seats
 	`
 
 	err := q.db.Get(&regToken, query, token)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("invalid or expired token")
+			return nil, fmt.Errorf("invalid, expired, or seats full")
 		}
 		return nil, fmt.Errorf("failed to validate token: %w", err)
 	}
@@ -89,27 +98,19 @@ func (q *RegistrationTokenQueries) ValidateRegistrationToken(token string) (*Reg
 }
 
 // MarkTokenUsed marks a token as used by an agent
+// With seat tracking, this increments seats_used and only marks status='used' when all seats are taken
 func (q *RegistrationTokenQueries) MarkTokenUsed(token string, agentID uuid.UUID) error {
-	query := `
-		UPDATE registration_tokens
-		SET status = 'used',
-			used_at = NOW(),
-			used_by_agent_id = $1
-		WHERE token = $2 AND status = 'active' AND expires_at > NOW()
-	`
+	// Call the PostgreSQL function that handles seat tracking logic
+	query := `SELECT mark_registration_token_used($1, $2)`
 
-	result, err := q.db.Exec(query, agentID, token)
+	var success bool
+	err := q.db.QueryRow(query, token, agentID).Scan(&success)
 	if err != nil {
 		return fmt.Errorf("failed to mark token as used: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("token not found or already used")
+	if !success {
+		return fmt.Errorf("token not found, already used, expired, or seats full")
 	}
 
 	return nil
@@ -120,7 +121,8 @@ func (q *RegistrationTokenQueries) GetActiveRegistrationTokens() ([]Registration
 	var tokens []RegistrationToken
 	query := `
 		SELECT id, token, label, expires_at, created_at, used_at, used_by_agent_id,
-			   revoked, revoked_at, revoked_reason, status, created_by, metadata
+			   revoked, revoked_at, revoked_reason, status, created_by, metadata,
+			   max_seats, seats_used
 		FROM registration_tokens
 		WHERE status = 'active'
 		ORDER BY created_at DESC
@@ -139,7 +141,8 @@ func (q *RegistrationTokenQueries) GetAllRegistrationTokens(limit, offset int) (
 	var tokens []RegistrationToken
 	query := `
 		SELECT id, token, label, expires_at, created_at, used_at, used_by_agent_id,
-			   revoked, revoked_at, revoked_reason, status, created_by, metadata
+			   revoked, revoked_at, revoked_reason, status, created_by, metadata,
+			   max_seats, seats_used
 		FROM registration_tokens
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -153,7 +156,7 @@ func (q *RegistrationTokenQueries) GetAllRegistrationTokens(limit, offset int) (
 	return tokens, nil
 }
 
-// RevokeRegistrationToken revokes a token
+// RevokeRegistrationToken revokes a token (can revoke tokens in any status)
 func (q *RegistrationTokenQueries) RevokeRegistrationToken(token, reason string) error {
 	query := `
 		UPDATE registration_tokens
@@ -161,7 +164,7 @@ func (q *RegistrationTokenQueries) RevokeRegistrationToken(token, reason string)
 			revoked = true,
 			revoked_at = NOW(),
 			revoked_reason = $1
-		WHERE token = $2 AND status = 'active'
+		WHERE token = $2
 	`
 
 	result, err := q.db.Exec(query, reason, token)
@@ -175,7 +178,28 @@ func (q *RegistrationTokenQueries) RevokeRegistrationToken(token, reason string)
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("token not found or already used/revoked")
+		return fmt.Errorf("token not found")
+	}
+
+	return nil
+}
+
+// DeleteRegistrationToken permanently deletes a token from the database
+func (q *RegistrationTokenQueries) DeleteRegistrationToken(tokenID uuid.UUID) error {
+	query := `DELETE FROM registration_tokens WHERE id = $1`
+
+	result, err := q.db.Exec(query, tokenID)
+	if err != nil {
+		return fmt.Errorf("failed to delete token: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("token not found")
 	}
 
 	return nil

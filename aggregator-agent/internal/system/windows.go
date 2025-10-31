@@ -14,19 +14,33 @@ import (
 func getWindowsInfo() string {
 	// Try using wmic for detailed Windows version info
 	if cmd, err := exec.LookPath("wmic"); err == nil {
-		if data, err := exec.Command(cmd, "os", "get", "Caption,Version,BuildNumber,SKU").Output(); err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.Contains(line, "Microsoft Windows") {
-					// Clean up the output
-					line = strings.TrimSpace(line)
-					// Remove extra spaces
-					for strings.Contains(line, "  ") {
-						line = strings.ReplaceAll(line, "  ", " ")
-					}
-					return line
-				}
+		// Get Caption (e.g., "Microsoft Windows 10 Pro")
+		caption := ""
+		if data, err := exec.Command(cmd, "os", "get", "Caption", "/value").Output(); err == nil {
+			output := strings.TrimSpace(string(data))
+			if strings.HasPrefix(output, "Caption=") {
+				caption = strings.TrimPrefix(output, "Caption=")
+				caption = strings.TrimSpace(caption)
 			}
+		}
+
+		// Get Version and Build Number
+		version := ""
+		if data, err := exec.Command(cmd, "os", "get", "Version", "/value").Output(); err == nil {
+			output := strings.TrimSpace(string(data))
+			if strings.HasPrefix(output, "Version=") {
+				version = strings.TrimPrefix(output, "Version=")
+				version = strings.TrimSpace(version)
+			}
+		}
+
+		// Combine caption and version for clean output
+		if caption != "" && version != "" {
+			return fmt.Sprintf("%s (Build %s)", caption, version)
+		} else if caption != "" {
+			return caption
+		} else if version != "" {
+			return fmt.Sprintf("Windows %s", version)
 		}
 	}
 
@@ -180,31 +194,50 @@ func getWindowsDiskInfo() ([]DiskInfo, error) {
 	var disks []DiskInfo
 
 	if cmd, err := exec.LookPath("wmic"); err == nil {
-		// Get logical disk information
-		if data, err := exec.Command(cmd, "logicaldisk", "get", "DeviceID,Size,FreeSpace,FileSystem").Output(); err == nil {
+		// Get logical disk information - use /value format for reliable parsing
+		if data, err := exec.Command(cmd, "logicaldisk", "get", "DeviceID,Size,FreeSpace,FileSystem", "/format:csv").Output(); err == nil {
 			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.TrimSpace(line) != "" && !strings.Contains(line, "DeviceID") {
-					fields := strings.Fields(line)
-					if len(fields) >= 4 {
-						disk := DiskInfo{
-							Mountpoint: strings.TrimSpace(fields[0]),
-							Filesystem: strings.TrimSpace(fields[3]),
-						}
+			for i, line := range lines {
+				line = strings.TrimSpace(line)
+				// Skip header and empty lines
+				if i == 0 || line == "" || !strings.Contains(line, ",") {
+					continue
+				}
 
-						// Parse sizes (wmic outputs in bytes)
-						if total, err := strconv.ParseUint(strings.TrimSpace(fields[1]), 10, 64); err == nil {
-							disk.Total = total
-						}
-						if available, err := strconv.ParseUint(strings.TrimSpace(fields[2]), 10, 64); err == nil {
-							disk.Available = available
-						}
+				// CSV format: Node,DeviceID,FileSystem,FreeSpace,Size
+				fields := strings.Split(line, ",")
+				if len(fields) >= 5 {
+					deviceID := strings.TrimSpace(fields[1])
+					filesystem := strings.TrimSpace(fields[2])
+					freeSpaceStr := strings.TrimSpace(fields[3])
+					sizeStr := strings.TrimSpace(fields[4])
 
+					// Skip if no size info (e.g., CD-ROM drives)
+					if sizeStr == "" || freeSpaceStr == "" {
+						continue
+					}
+
+					disk := DiskInfo{
+						Mountpoint: deviceID,
+						Filesystem: filesystem,
+					}
+
+					// Parse sizes (wmic outputs in bytes)
+					if total, err := strconv.ParseUint(sizeStr, 10, 64); err == nil {
+						disk.Total = total
+					}
+					if available, err := strconv.ParseUint(freeSpaceStr, 10, 64); err == nil {
+						disk.Available = available
+					}
+
+					// Calculate used space
+					if disk.Total > 0 && disk.Available <= disk.Total {
 						disk.Used = disk.Total - disk.Available
-						if disk.Total > 0 {
-							disk.UsedPercent = float64(disk.Used) / float64(disk.Total) * 100
-						}
+						disk.UsedPercent = float64(disk.Used) / float64(disk.Total) * 100
+					}
 
+					// Only add disks with valid size info
+					if disk.Total > 0 {
 						disks = append(disks, disk)
 					}
 				}
@@ -238,42 +271,62 @@ func getWindowsProcessCount() (int, error) {
 func getWindowsUptime() (string, error) {
 	// Try PowerShell first for more accurate uptime
 	if cmd, err := exec.LookPath("powershell"); err == nil {
+		// Get uptime in seconds for precise calculation
 		if data, err := exec.Command(cmd, "-Command",
-			"(Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime | Select-Object TotalDays").Output(); err == nil {
-			// Parse the output to get days
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.Contains(line, "TotalDays") {
-					fields := strings.Fields(line)
-					if len(fields) >= 2 {
-						if days, err := strconv.ParseFloat(fields[len(fields)-1], 64); err == nil {
-							return formatUptimeFromDays(days), nil
-						}
-					}
-				}
+			"(New-TimeSpan -Start (Get-CimInstance Win32_OperatingSystem).LastBootUpTime -End (Get-Date)).TotalSeconds").Output(); err == nil {
+			secondsStr := strings.TrimSpace(string(data))
+			if seconds, err := strconv.ParseFloat(secondsStr, 64); err == nil {
+				return formatUptimeFromSeconds(seconds), nil
 			}
 		}
 	}
 
-	// Fallback to wmic
+	// Fallback to wmic with manual parsing
 	if cmd, err := exec.LookPath("wmic"); err == nil {
-		if data, err := exec.Command(cmd, "os", "get", "LastBootUpTime").Output(); err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.TrimSpace(line) != "" && !strings.Contains(line, "LastBootUpTime") {
-					// Parse WMI datetime format: 20231201123045.123456-300
-					wmiTime := strings.TrimSpace(line)
-					if len(wmiTime) >= 14 {
-						// Extract just the date part for basic calculation
-						// This is a simplified approach - in production you'd want proper datetime parsing
-						return fmt.Sprintf("Since %s", wmiTime[:8]), nil
-					}
+		if data, err := exec.Command(cmd, "os", "get", "LastBootUpTime", "/value").Output(); err == nil {
+			output := strings.TrimSpace(string(data))
+			if strings.HasPrefix(output, "LastBootUpTime=") {
+				wmiTime := strings.TrimPrefix(output, "LastBootUpTime=")
+				wmiTime = strings.TrimSpace(wmiTime)
+				// Parse WMI datetime format: 20251025123045.123456-300
+				if len(wmiTime) >= 14 {
+					// Extract date/time components: YYYYMMDDHHmmss
+					year := wmiTime[0:4]
+					month := wmiTime[4:6]
+					day := wmiTime[6:8]
+					hour := wmiTime[8:10]
+					minute := wmiTime[10:12]
+					second := wmiTime[12:14]
+
+					bootTimeStr := fmt.Sprintf("%s-%s-%s %s:%s:%s", year, month, day, hour, minute, second)
+					return fmt.Sprintf("Since %s", bootTimeStr), nil
 				}
 			}
 		}
 	}
 
 	return "Unknown", nil
+}
+
+// formatUptimeFromSeconds formats uptime from seconds into human readable format
+func formatUptimeFromSeconds(seconds float64) string {
+	days := int(seconds / 86400)
+	hours := int((seconds - float64(days*86400)) / 3600)
+	minutes := int((seconds - float64(days*86400) - float64(hours*3600)) / 60)
+
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("%d days, %d hours", days, hours)
+		}
+		return fmt.Sprintf("%d days", days)
+	} else if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%d hours, %d minutes", hours, minutes)
+		}
+		return fmt.Sprintf("%d hours", hours)
+	} else {
+		return fmt.Sprintf("%d minutes", minutes)
+	}
 }
 
 // formatUptimeFromDays formats uptime from days into human readable format

@@ -349,6 +349,12 @@ func (c *Config) Save(configPath string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
+	// Create parent directory if it doesn't exist
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}

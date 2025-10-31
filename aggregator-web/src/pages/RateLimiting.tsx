@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Shield,
   RefreshCw,
@@ -25,7 +26,24 @@ import {
 } from '../hooks/useRateLimits';
 import { RateLimitConfig, RateLimitStats, RateLimitUsage } from '@/types';
 
+// Helper function to format date/time strings
+const formatDateTime = (dateString: string): string => {
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch (error) {
+    return dateString;
+  }
+};
+
 const RateLimiting: React.FC = () => {
+  const navigate = useNavigate();
   const [editingMode, setEditingMode] = useState(false);
   const [editingConfigs, setEditingConfigs] = useState<RateLimitConfig[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -46,14 +64,14 @@ const RateLimiting: React.FC = () => {
   const cleanupLimits = useCleanupRateLimits();
 
   React.useEffect(() => {
-    if (configs) {
+    if (configs && Array.isArray(configs)) {
       setEditingConfigs([...configs]);
     }
   }, [configs]);
 
   // Filtered configurations for display
   const filteredConfigs = useMemo(() => {
-    if (!configs) return [];
+    if (!configs || !Array.isArray(configs)) return [];
 
     return configs.filter((config) => {
       const matchesSearch = searchTerm === '' ||
@@ -122,6 +140,13 @@ const RateLimiting: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
+      <button
+        onClick={() => navigate('/settings')}
+        className="text-sm text-gray-500 hover:text-gray-700 mb-4"
+      >
+        ← Back to Settings
+      </button>
+
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between">
@@ -234,7 +259,9 @@ const RateLimiting: React.FC = () => {
               </button>
               <button
                 onClick={() => {
-                  setEditingConfigs([...configs!]);
+                  if (configs && Array.isArray(configs)) {
+                    setEditingConfigs([...configs]);
+                  }
                   setEditingMode(false);
                 }}
                 className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
@@ -489,7 +516,7 @@ const RateLimiting: React.FC = () => {
       </div>
 
       {/* Rate Limit Statistics */}
-      {stats && stats.length > 0 && (
+      {stats && Array.isArray(stats) && stats.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="px-6 py-4 border-b border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900">Rate Limit Statistics</h2>
@@ -526,7 +553,7 @@ const RateLimiting: React.FC = () => {
                     </div>
                   </div>
 
-                  {stat.top_clients && stat.top_clients.length > 0 && (
+                  {stat.top_clients && Array.isArray(stat.top_clients) && stat.top_clients.length > 0 && (
                     <div className="mt-4 pt-3 border-t border-gray-200">
                       <p className="text-xs text-gray-600 mb-2">Top Clients:</p>
                       <div className="space-y-1">
@@ -547,7 +574,7 @@ const RateLimiting: React.FC = () => {
       )}
 
       {/* Usage Monitoring */}
-      {usage && usage.length > 0 && (
+      {usage && Array.isArray(usage) && usage.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="px-6 py-4 border-b border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900">Usage Monitoring</h2>

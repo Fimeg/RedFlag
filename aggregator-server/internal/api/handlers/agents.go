@@ -15,20 +15,22 @@ import (
 )
 
 type AgentHandler struct {
-	agentQueries          *queries.AgentQueries
-	commandQueries        *queries.CommandQueries
-	refreshTokenQueries   *queries.RefreshTokenQueries
-	checkInInterval       int
-	latestAgentVersion    string
+	agentQueries             *queries.AgentQueries
+	commandQueries           *queries.CommandQueries
+	refreshTokenQueries      *queries.RefreshTokenQueries
+	registrationTokenQueries *queries.RegistrationTokenQueries
+	checkInInterval          int
+	latestAgentVersion       string
 }
 
-func NewAgentHandler(aq *queries.AgentQueries, cq *queries.CommandQueries, rtq *queries.RefreshTokenQueries, checkInInterval int, latestAgentVersion string) *AgentHandler {
+func NewAgentHandler(aq *queries.AgentQueries, cq *queries.CommandQueries, rtq *queries.RefreshTokenQueries, regTokenQueries *queries.RegistrationTokenQueries, checkInInterval int, latestAgentVersion string) *AgentHandler {
 	return &AgentHandler{
-		agentQueries:          aq,
-		commandQueries:        cq,
-		refreshTokenQueries:   rtq,
-		checkInInterval:       checkInInterval,
-		latestAgentVersion:    latestAgentVersion,
+		agentQueries:             aq,
+		commandQueries:           cq,
+		refreshTokenQueries:      rtq,
+		registrationTokenQueries: regTokenQueries,
+		checkInInterval:          checkInInterval,
+		latestAgentVersion:       latestAgentVersion,
 	}
 }
 
@@ -37,6 +39,35 @@ func (h *AgentHandler) RegisterAgent(c *gin.Context) {
 	var req models.AgentRegistrationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate registration token (critical security check)
+	// Extract token from Authorization header or request body
+	var registrationToken string
+
+	// Try Authorization header first (Bearer token)
+	if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+			registrationToken = authHeader[7:]
+		}
+	}
+
+	// If not in header, try request body (fallback)
+	if registrationToken == "" && req.RegistrationToken != "" {
+		registrationToken = req.RegistrationToken
+	}
+
+	// Reject if no registration token provided
+	if registrationToken == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "registration token required"})
+		return
+	}
+
+	// Validate the registration token
+	tokenInfo, err := h.registrationTokenQueries.ValidateRegistrationToken(registrationToken)
+	if err != nil || tokenInfo == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired registration token"})
 		return
 	}
 
@@ -63,6 +94,17 @@ func (h *AgentHandler) RegisterAgent(c *gin.Context) {
 	// Save to database
 	if err := h.agentQueries.CreateAgent(agent); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register agent"})
+		return
+	}
+
+	// Mark registration token as used (CRITICAL: must succeed or delete agent)
+	if err := h.registrationTokenQueries.MarkTokenUsed(registrationToken, agent.ID); err != nil {
+		// Token marking failed - rollback agent creation to prevent token reuse
+		log.Printf("ERROR: Failed to mark registration token as used: %v - rolling back agent creation", err)
+		if deleteErr := h.agentQueries.DeleteAgent(agent.ID); deleteErr != nil {
+			log.Printf("ERROR: Failed to delete agent during rollback: %v", deleteErr)
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "registration token could not be consumed - token may be expired, revoked, or all seats may be used"})
 		return
 	}
 

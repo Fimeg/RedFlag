@@ -262,9 +262,42 @@ func getDiskInfo() ([]DiskInfo, error) {
 
 					fields := strings.Fields(line)
 					if len(fields) >= 6 {
+						mountpoint := fields[0]
+						filesystem := fields[5]
+
+						// Filter out pseudo-filesystems and only show physical/important mounts
+						// Skip tmpfs, devtmpfs, overlay, squashfs, etc.
+						if strings.HasPrefix(filesystem, "tmpfs") ||
+							strings.HasPrefix(filesystem, "devtmpfs") ||
+							strings.HasPrefix(filesystem, "overlay") ||
+							strings.HasPrefix(filesystem, "squashfs") ||
+							strings.HasPrefix(filesystem, "udev") ||
+							strings.HasPrefix(filesystem, "proc") ||
+							strings.HasPrefix(filesystem, "sysfs") ||
+							strings.HasPrefix(filesystem, "cgroup") ||
+							strings.HasPrefix(filesystem, "devpts") ||
+							strings.HasPrefix(filesystem, "securityfs") ||
+							strings.HasPrefix(filesystem, "pstore") ||
+							strings.HasPrefix(filesystem, "bpf") ||
+							strings.HasPrefix(filesystem, "configfs") ||
+							strings.HasPrefix(filesystem, "fusectl") ||
+							strings.HasPrefix(filesystem, "hugetlbfs") ||
+							strings.HasPrefix(filesystem, "mqueue") ||
+							strings.HasPrefix(filesystem, "debugfs") ||
+							strings.HasPrefix(filesystem, "tracefs") {
+							continue // Skip virtual/pseudo filesystems
+						}
+
+						// Skip container/snap mounts unless they're important
+						if strings.Contains(mountpoint, "/snap/") ||
+							strings.Contains(mountpoint, "/var/lib/docker") ||
+							strings.Contains(mountpoint, "/run") {
+							continue
+						}
+
 						disk := DiskInfo{
-							Mountpoint: fields[0],
-							Filesystem: fields[5],
+							Mountpoint: mountpoint,
+							Filesystem: filesystem,
 						}
 
 						// Parse sizes (df outputs in human readable format, we'll parse the numeric part)

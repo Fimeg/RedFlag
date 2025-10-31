@@ -14,9 +14,15 @@
 # All documentation goes in docs/ folder (private development)
 docs/
 *.md
+TEST-CLONE.md
 !README.md
 !LICENSE
+!NOTICE
 !.env.example
+!docs/API.md
+!docs/CONFIGURATION.md
+!docs/ARCHITECTURE.md
+!docs/DEVELOPMENT.md
 
 # Test binary, built with `go test -c`
 *.test
@@ -418,6 +424,11 @@ deployment/
 # =============================================================================
 docs/
 *.md
+TEST-CLONE.md
 !README.md
 !LICENSE
 !.env.example
+!docs/API.md
+!docs/CONFIGURATION.md
+!docs/ARCHITECTURE.md
+!docs/DEVELOPMENT.md

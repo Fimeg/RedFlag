@@ -56,6 +56,13 @@ install_binary() {
     chmod 755 "$AGENT_BINARY"
     chown root:root "$AGENT_BINARY"
     echo "✓ Agent binary installed"
+
+    # Set SELinux context for binary if SELinux is enabled
+    if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+        echo "SELinux detected, setting file context for binary..."
+        restorecon -v "$AGENT_BINARY" 2>/dev/null || true
+        echo "✓ SELinux context set for binary"
+    fi
 }
 
 # Function to install sudoers configuration
@@ -166,6 +173,13 @@ register_agent() {
 
     # Create config directory
     mkdir -p /etc/aggregator
+
+    # Set SELinux context for config directory if SELinux is enabled
+    if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+        echo "Setting SELinux context for config directory..."
+        restorecon -Rv /etc/aggregator 2>/dev/null || true
+        echo "✓ SELinux context set for config directory"
+    fi
 
     # Register agent (run as regular binary, not as service)
     if "$AGENT_BINARY" -register -server "$server_url"; then

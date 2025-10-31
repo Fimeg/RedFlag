@@ -6,24 +6,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
-	"time"
-
-	"github.com/joho/godotenv"
-	"golang.org/x/term"
 )
 
 // Config holds the application configuration
 type Config struct {
 	Server struct {
-		Host string `env:"REDFLAG_SERVER_HOST" default:"0.0.0.0"`
-		Port int    `env:"REDFLAG_SERVER_PORT" default:"8080"`
-		TLS  struct {
-			Enabled   bool   `env:"REDFLAG_TLS_ENABLED" default:"false"`
-			CertFile  string `env:"REDFLAG_TLS_CERT_FILE"`
-			KeyFile   string `env:"REDFLAG_TLS_KEY_FILE"`
+		Host      string `env:"REDFLAG_SERVER_HOST" default:"0.0.0.0"`
+		Port      int    `env:"REDFLAG_SERVER_PORT" default:"8080"`
+		PublicURL string `env:"REDFLAG_PUBLIC_URL"` // Optional: External URL for reverse proxy/load balancer
+		TLS       struct {
+			Enabled  bool   `env:"REDFLAG_TLS_ENABLED" default:"false"`
+			CertFile string `env:"REDFLAG_TLS_CERT_FILE"`
+			KeyFile  string `env:"REDFLAG_TLS_KEY_FILE"`
 		}
 	}
 	Database struct {
@@ -49,17 +44,9 @@ type Config struct {
 	LatestAgentVersion string
 }
 
-// Load reads configuration from environment variables
+// Load reads configuration from environment variables only (immutable configuration)
 func Load() (*Config, error) {
-	// Load .env file from persistent config directory
-	configPaths := []string{"/app/config/.env", ".env"}
-
-	for _, path := range configPaths {
-		if _, err := os.Stat(path); err == nil {
-			_ = godotenv.Load(path)
-			break
-		}
-	}
+	fmt.Printf("[CONFIG] Loading configuration from environment variables\n")
 
 	cfg := &Config{}
 
@@ -67,6 +54,7 @@ func Load() (*Config, error) {
 	cfg.Server.Host = getEnv("REDFLAG_SERVER_HOST", "0.0.0.0")
 	serverPort, _ := strconv.Atoi(getEnv("REDFLAG_SERVER_PORT", "8080"))
 	cfg.Server.Port = serverPort
+	cfg.Server.PublicURL = getEnv("REDFLAG_PUBLIC_URL", "") // Optional external URL
 	cfg.Server.TLS.Enabled = getEnv("REDFLAG_TLS_ENABLED", "false") == "true"
 	cfg.Server.TLS.CertFile = getEnv("REDFLAG_TLS_CERT_FILE", "")
 	cfg.Server.TLS.KeyFile = getEnv("REDFLAG_TLS_KEY_FILE", "")
@@ -106,6 +94,13 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("missing required configuration")
 	}
 
+	// Check if we're using bootstrap defaults that need to be replaced
+	if cfg.Admin.Password == "changeme" || cfg.Admin.JWTSecret == "bootstrap-jwt-secret-replace-in-setup" || cfg.Database.Password == "redflag_bootstrap" {
+		fmt.Printf("[INFO] Server running with bootstrap configuration - setup required\n")
+		fmt.Printf("[INFO] Configure via web interface at: http://localhost:8080/setup\n")
+		return nil, fmt.Errorf("bootstrap configuration detected - setup required")
+	}
+
 	// Validate JWT secret is not the development default
 	if cfg.Admin.JWTSecret == "test-secret-for-development-only" {
 		fmt.Printf("[SECURITY WARNING] Using development JWT secret\n")
@@ -115,103 +110,9 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// RunSetupWizard guides user through initial configuration
+// RunSetupWizard is deprecated - configuration is now handled via web interface
 func RunSetupWizard() error {
-	fmt.Printf("RedFlag Server Setup Wizard\n")
-	fmt.Printf("===========================\n\n")
-
-	// Admin credentials
-	fmt.Printf("Admin Account Setup\n")
-	fmt.Printf("--------------------\n")
-	username := promptForInput("Admin username", "admin")
-	password := promptForPassword("Admin password")
-
-	// Database configuration
-	fmt.Printf("\nDatabase Configuration\n")
-	fmt.Printf("----------------------\n")
-	dbHost := promptForInput("Database host", "localhost")
-	dbPort, _ := strconv.Atoi(promptForInput("Database port", "5432"))
-	dbName := promptForInput("Database name", "redflag")
-	dbUser := promptForInput("Database user", "redflag")
-	dbPassword := promptForPassword("Database password")
-
-	// Server configuration
-	fmt.Printf("\nServer Configuration\n")
-	fmt.Printf("--------------------\n")
-	serverHost := promptForInput("Server bind address", "0.0.0.0")
-	serverPort, _ := strconv.Atoi(promptForInput("Server port", "8080"))
-
-	// Agent limits
-	fmt.Printf("\nAgent Registration\n")
-	fmt.Printf("------------------\n")
-	maxSeats, _ := strconv.Atoi(promptForInput("Maximum agent seats (security limit)", "50"))
-
-	// Generate JWT secret from admin password
-	jwtSecret := deriveJWTSecret(username, password)
-
-	// Create .env file
-	envContent := fmt.Sprintf(`# RedFlag Server Configuration
-# Generated on %s
-
-# Server Configuration
-REDFLAG_SERVER_HOST=%s
-REDFLAG_SERVER_PORT=%d
-REDFLAG_TLS_ENABLED=false
-# REDFLAG_TLS_CERT_FILE=
-# REDFLAG_TLS_KEY_FILE=
-
-# Database Configuration
-REDFLAG_DB_HOST=%s
-REDFLAG_DB_PORT=%d
-REDFLAG_DB_NAME=%s
-REDFLAG_DB_USER=%s
-REDFLAG_DB_PASSWORD=%s
-
-# Admin Configuration
-REDFLAG_ADMIN_USER=%s
-REDFLAG_ADMIN_PASSWORD=%s
-REDFLAG_JWT_SECRET=%s
-
-# Agent Registration
-REDFLAG_TOKEN_EXPIRY=24h
-REDFLAG_MAX_TOKENS=100
-REDFLAG_MAX_SEATS=%d
-
-# Legacy Configuration (for backwards compatibility)
-SERVER_PORT=%d
-DATABASE_URL=postgres://%s:%s@%s:%d/%s?sslmode=disable
-JWT_SECRET=%s
-CHECK_IN_INTERVAL=300
-OFFLINE_THRESHOLD=600
-TIMEZONE=UTC
-LATEST_AGENT_VERSION=0.1.8
-`, time.Now().Format("2006-01-02 15:04:05"), serverHost, serverPort,
-		dbHost, dbPort, dbName, dbUser, dbPassword,
-		username, password, jwtSecret, maxSeats,
-		serverPort, dbUser, dbPassword, dbHost, dbPort, dbName, jwtSecret)
-
-	// Write .env file to persistent location
-	configDir := "/app/config"
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	envPath := filepath.Join(configDir, ".env")
-	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
-		return fmt.Errorf("failed to write .env file: %w", err)
-	}
-
-	fmt.Printf("\n[OK] Configuration saved to .env file\n")
-	fmt.Printf("[SECURITY] File permissions set to 0600 (owner read/write only)\n")
-	fmt.Printf("\nNext steps:\n")
-	fmt.Printf("   1. Start database: %s:%d\n", dbHost, dbPort)
-	fmt.Printf("   2. Create database: CREATE DATABASE %s;\n", dbName)
-	fmt.Printf("   3. Run migrations: ./redflag-server --migrate\n")
-	fmt.Printf("   4. Start server: ./redflag-server\n")
-	fmt.Printf("\nServer will be available at: http://%s:%d\n", serverHost, serverPort)
-	fmt.Printf("Admin interface: http://%s:%d/admin\n", serverHost, serverPort)
-
-	return nil
+	return fmt.Errorf("CLI setup wizard is deprecated. Please use the web interface at http://localhost:8080/setup for configuration")
 }
 
 func getEnv(key, defaultValue string) string {
@@ -221,28 +122,6 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func promptForInput(prompt, defaultValue string) string {
-	fmt.Printf("%s [%s]: ", prompt, defaultValue)
-	var input string
-	fmt.Scanln(&input)
-	if strings.TrimSpace(input) == "" {
-		return defaultValue
-	}
-	return strings.TrimSpace(input)
-}
-
-func promptForPassword(prompt string) string {
-	fmt.Printf("%s: ", prompt)
-	password, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		// Fallback to non-hidden input
-		var input string
-		fmt.Scanln(&input)
-		return strings.TrimSpace(input)
-	}
-	fmt.Printf("\n")
-	return strings.TrimSpace(string(password))
-}
 
 func deriveJWTSecret(username, password string) string {
 	// Derive JWT secret from admin credentials

@@ -1,0 +1,13 @@
+RedFlag Agent
+Copyright 2024-2025
+
+This software includes code from the following third-party projects:
+
+---
+
+windowsupdate
+Copyright 2022 Zheng Dayu
+Licensed under the Apache License, Version 2.0
+https://github.com/ceshihao/windowsupdate
+
+Included in: aggregator-agent/pkg/windowsupdate/

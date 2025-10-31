@@ -63,12 +63,13 @@ type AgentSpecs struct {
 
 // AgentRegistrationRequest is the payload for agent registration
 type AgentRegistrationRequest struct {
-	Hostname       string            `json:"hostname" binding:"required"`
-	OSType         string            `json:"os_type" binding:"required"`
-	OSVersion      string            `json:"os_version"`
-	OSArchitecture string            `json:"os_architecture"`
-	AgentVersion   string            `json:"agent_version" binding:"required"`
-	Metadata       map[string]string `json:"metadata"`
+	Hostname         string            `json:"hostname" binding:"required"`
+	OSType           string            `json:"os_type" binding:"required"`
+	OSVersion        string            `json:"os_version"`
+	OSArchitecture   string            `json:"os_architecture"`
+	AgentVersion     string            `json:"agent_version" binding:"required"`
+	RegistrationToken string           `json:"registration_token"` // Optional, for fallback method
+	Metadata         map[string]string `json:"metadata"`
 }
 
 // AgentRegistrationResponse is returned after successful registration

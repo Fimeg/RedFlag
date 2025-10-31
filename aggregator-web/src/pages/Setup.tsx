@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { XCircle } from 'lucide-react';
+import { Settings, Database, User, Shield, Eye, EyeOff, CheckCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { setupApi } from '@/lib/api';
 
@@ -17,11 +17,15 @@ interface SetupFormData {
   maxSeats: string;
 }
 
-
 const Setup: React.FC = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jwtSecret, setJwtSecret] = useState<string | null>(null);
+  const [envContent, setEnvContent] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showDbPassword, setShowDbPassword] = useState(false);
 
   const [formData, setFormData] = useState<SetupFormData>({
     adminUser: 'admin',
@@ -108,19 +112,11 @@ const Setup: React.FC = () => {
     try {
       const result = await setupApi.configure(formData);
 
+      // Store JWT secret, env content and show success screen
+      setJwtSecret(result.jwtSecret || null);
+      setEnvContent(result.envContent || null);
+      setShowSuccess(true);
       toast.success(result.message || 'Configuration saved successfully!');
-
-      if (result.restart) {
-        // Server is restarting, wait for it to come back online
-        setTimeout(() => {
-          navigate('/login');
-        }, 5000); // Give server time to restart
-      } else {
-        // No restart, redirect immediately
-        setTimeout(() => {
-          navigate('/login');
-        }, 2000);
-      }
 
     } catch (error: any) {
       console.error('Setup error:', error);
@@ -132,38 +128,177 @@ const Setup: React.FC = () => {
     }
   };
 
-  return (
-    <div className="px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="py-8">
-          <h2 className="text-2xl font-bold text-gray-900">Server Setup</h2>
-          <p className="mt-1 text-sm text-gray-600">
-            Configure your update management server
-          </p>
-        </div>
+  // Success screen with credentials display
+  if (showSuccess && jwtSecret) {
+    return (
+      <div className="px-4 sm:px-6 lg:px-8">
+        <div className="max-w-3xl mx-auto">
+          {/* Header */}
+          <div className="mb-8">
+            <div className="flex items-center justify-center mb-4">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="w-8 h-8 text-green-600" />
+              </div>
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 text-center mb-2">
+              Configuration Complete!
+            </h1>
+            <p className="text-gray-600 text-center">
+              Your RedFlag server is ready to use
+            </p>
+          </div>
 
-        <div className="bg-white shadow rounded-lg">
-          <form onSubmit={handleSubmit} className="divide-y divide-gray-200">
-            {/* Error Display */}
-            {error && (
-              <div className="px-6 py-4 bg-red-50">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <XCircle className="h-5 w-5 text-red-400" />
+          {/* Success Card */}
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+            {/* Admin Credentials Section */}
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Administrator Credentials</h3>
+              <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+                <div className="grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Username</label>
+                    <div className="mt-1 p-2 bg-white border border-gray-300 rounded text-sm font-mono">{formData.adminUser}</div>
                   </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-red-800">{error}</h3>
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Password</label>
+                    <div className="mt-1 p-2 bg-white border border-gray-300 rounded text-sm font-mono">••••••••</div>
                   </div>
+                </div>
+              </div>
+              <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-md">
+                <p className="text-sm text-green-800">
+                  <strong>Important:</strong> Save these credentials securely. You'll use them to login to the RedFlag dashboard.
+                </p>
+              </div>
+            </div>
+
+            {/* Configuration Content Section */}
+            {envContent && (
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Configuration File Content</h3>
+                <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+                  <textarea
+                    readOnly
+                    value={envContent}
+                    className="w-full h-64 p-3 text-xs font-mono text-gray-800 bg-white border border-gray-300 rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(envContent);
+                    toast.success('Configuration content copied to clipboard!');
+                  }}
+                  className="mt-3 w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                >
+                  Copy Configuration Content
+                </button>
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                  <p className="text-sm text-blue-800">
+                    <strong>Important:</strong> Copy this configuration content and save it to <code className="bg-blue-100 px-1 rounded">./config/.env</code>, then run <code className="bg-blue-100 px-1 rounded">docker-compose down && docker-compose up -d</code> to apply the configuration.
+                  </p>
                 </div>
               </div>
             )}
 
-            {/* Admin Account */}
-            <div className="px-6 py-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Admin Account</h3>
+            {/* JWT Secret Section (Server Configuration) */}
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Server JWT Secret</h3>
+              <div className="bg-gray-50 border border-gray-200 rounded-md p-4">
+                <code className="text-sm text-gray-800 break-all font-mono">{jwtSecret}</code>
+              </div>
+              <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                <p className="text-sm text-gray-700">
+                  <strong>For your information:</strong> This JWT secret is used internally by the server for session management and agent authentication. It's automatically included in the configuration file above.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(jwtSecret);
+                  toast.success('JWT secret copied to clipboard!');
+                }}
+                className="mt-3 w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+              >
+                Copy JWT Secret (Optional)
+              </button>
+            </div>
+
+            {/* Next Steps */}
+            <div className="border-t border-gray-200 pt-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Next Steps</h3>
+              <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600">
+                <li>Copy the configuration content using the green button above</li>
+                <li>Save it to <code className="bg-gray-100 px-1 rounded">./config/.env</code></li>
+                <li>Run <code className="bg-gray-100 px-1 rounded">docker-compose down && docker-compose up -d</code></li>
+                <li>Login to the dashboard with your admin username and password</li>
+              </ol>
+            </div>
+
+            <div className="mt-6 pt-6 border-t border-gray-200 space-y-3">
+              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                <p className="text-sm text-yellow-800">
+                  <strong>Important:</strong> You must restart the containers to apply the configuration before logging in.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  toast.success('Please run: docker-compose down && docker-compose up -d');
+                }}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+              >
+                Show Restart Command
+              </button>
+              <button
+                onClick={() => {
+                  setTimeout(() => navigate('/login'), 500);
+                }}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                Continue to Login (After Restart)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex items-center justify-center mb-4">
+            <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center">
+              <span className="text-2xl">🚩</span>
+            </div>
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900 text-center mb-2">
+            Configure RedFlag Server
+          </h1>
+          <p className="text-gray-600 text-center">
+            Set up your update management server configuration
+          </p>
+        </div>
+
+        {/* Setup Form */}
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+          <form onSubmit={handleSubmit} className="space-y-8">
+            {/* Error Display */}
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                <div className="text-sm text-red-800">{error}</div>
+              </div>
+            )}
+
+            {/* Administrator Account */}
+            <div>
+              <div className="flex items-center mb-4">
+                <User className="h-5 w-5 text-indigo-600 mr-2" />
+                <h3 className="text-lg font-semibold text-gray-900">Administrator Account</h3>
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="adminUser" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="adminUser" className="block text-sm font-medium text-gray-700 mb-1">
                     Admin Username
                   </label>
                   <input
@@ -172,33 +307,51 @@ const Setup: React.FC = () => {
                     name="adminUser"
                     value={formData.adminUser}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="admin"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="adminPassword" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="adminPassword" className="block text-sm font-medium text-gray-700 mb-1">
                     Admin Password
                   </label>
-                  <input
-                    type="password"
-                    id="adminPassword"
-                    name="adminPassword"
-                    value={formData.adminPassword}
-                    onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      id="adminPassword"
+                      name="adminPassword"
+                      value={formData.adminPassword}
+                      onChange={handleInputChange}
+                      className="block w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      placeholder="Enter secure password"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                      onClick={() => setShowPassword(!showPassword)}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Database Configuration */}
-            <div className="px-6 py-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Database Configuration</h3>
+            <div>
+              <div className="flex items-center mb-4">
+                <Database className="h-5 w-5 text-indigo-600 mr-2" />
+                <h3 className="text-lg font-semibold text-gray-900">Database Configuration</h3>
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
-                  <label htmlFor="dbHost" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="dbHost" className="block text-sm font-medium text-gray-700 mb-1">
                     Database Host
                   </label>
                   <input
@@ -207,12 +360,13 @@ const Setup: React.FC = () => {
                     name="dbHost"
                     value={formData.dbHost}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="postgres"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="dbPort" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="dbPort" className="block text-sm font-medium text-gray-700 mb-1">
                     Database Port
                   </label>
                   <input
@@ -221,12 +375,12 @@ const Setup: React.FC = () => {
                     name="dbPort"
                     value={formData.dbPort}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="dbName" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="dbName" className="block text-sm font-medium text-gray-700 mb-1">
                     Database Name
                   </label>
                   <input
@@ -235,12 +389,13 @@ const Setup: React.FC = () => {
                     name="dbName"
                     value={formData.dbName}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="redflag"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="dbUser" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="dbUser" className="block text-sm font-medium text-gray-700 mb-1">
                     Database User
                   </label>
                   <input
@@ -249,33 +404,51 @@ const Setup: React.FC = () => {
                     name="dbUser"
                     value={formData.dbUser}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="redflag"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="dbPassword" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="dbPassword" className="block text-sm font-medium text-gray-700 mb-1">
                     Database Password
                   </label>
-                  <input
-                    type="password"
-                    id="dbPassword"
-                    name="dbPassword"
-                    value={formData.dbPassword}
-                    onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type={showDbPassword ? 'text' : 'password'}
+                      id="dbPassword"
+                      name="dbPassword"
+                      value={formData.dbPassword}
+                      onChange={handleInputChange}
+                      className="block w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                      placeholder="Enter database password"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                      onClick={() => setShowDbPassword(!showDbPassword)}
+                    >
+                      {showDbPassword ? (
+                        <EyeOff className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Server Configuration */}
-            <div className="px-6 py-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Server Configuration</h3>
+            <div>
+              <div className="flex items-center mb-4">
+                <Settings className="h-5 w-5 text-indigo-600 mr-2" />
+                <h3 className="text-lg font-semibold text-gray-900">Server Configuration</h3>
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="serverHost" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="serverHost" className="block text-sm font-medium text-gray-700 mb-1">
                     Server Host
                   </label>
                   <input
@@ -284,12 +457,13 @@ const Setup: React.FC = () => {
                     name="serverHost"
                     value={formData.serverHost}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="0.0.0.0"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="serverPort" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="serverPort" className="block text-sm font-medium text-gray-700 mb-1">
                     Server Port
                   </label>
                   <input
@@ -298,12 +472,13 @@ const Setup: React.FC = () => {
                     name="serverPort"
                     value={formData.serverPort}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    placeholder="8080"
                     required
                   />
                 </div>
                 <div>
-                  <label htmlFor="maxSeats" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="maxSeats" className="block text-sm font-medium text-gray-700 mb-1">
                     Maximum Agent Seats
                   </label>
                   <input
@@ -312,9 +487,10 @@ const Setup: React.FC = () => {
                     name="maxSeats"
                     value={formData.maxSeats}
                     onChange={handleInputChange}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                     min="1"
                     max="1000"
+                    placeholder="50"
                     required
                   />
                   <p className="mt-1 text-xs text-gray-500">Security limit for agent registration</p>
@@ -323,19 +499,22 @@ const Setup: React.FC = () => {
             </div>
 
             {/* Submit Button */}
-            <div className="px-6 py-4 bg-gray-50">
+            <div className="pt-6 border-t border-gray-200">
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? (
                   <div className="flex items-center">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Configuring...
+                    Configuring RedFlag Server...
                   </div>
                 ) : (
-                  'Configure Server'
+                  <div className="flex items-center">
+                    <Shield className="w-4 h-4 mr-2" />
+                    Configure RedFlag Server
+                  </div>
                 )}
               </button>
             </div>

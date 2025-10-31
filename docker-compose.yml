@@ -5,9 +5,11 @@ services:
     environment:
       POSTGRES_DB: redflag
       POSTGRES_USER: redflag
-      POSTGRES_PASSWORD: redflag
+      POSTGRES_PASSWORD: redflag_bootstrap
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./config/.env:/shared/.env
     ports:
       - "5432:5432"
     healthcheck:
@@ -16,31 +18,27 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    env_file:
+      - ./config/.env
 
   server:
     build:
-      context: ./aggregator-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./aggregator-server/Dockerfile
     container_name: redflag-server
     volumes:
-      - ./aggregator-agent/redflag-agent:/app/redflag-agent:ro
       - server-config:/app/config
       - server-data:/app/data
+      - ./config/.env:/shared/.env
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "8080:8080"
-    environment:
-      - REDFLAG_DB_HOST=postgres
-      - REDFLAG_DB_PORT=5432
-      - REDFLAG_DB_NAME=redflag
-      - REDFLAG_DB_USER=redflag
-      - REDFLAG_DB_PASSWORD=redflag
-      - REDFLAG_SERVER_HOST=0.0.0.0
-      - REDFLAG_SERVER_PORT=8080
     command: ["./redflag-server"]
     restart: unless-stopped
+    env_file:
+      - ./config/.env
 
   web:
     build:

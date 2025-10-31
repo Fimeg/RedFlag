@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Shield,
   Plus,
@@ -19,6 +20,7 @@ import {
   useRegistrationTokens,
   useCreateRegistrationToken,
   useRevokeRegistrationToken,
+  useDeleteRegistrationToken,
   useRegistrationTokenStats,
   useCleanupRegistrationTokens
 } from '../hooks/useRegistrationTokens';
@@ -26,6 +28,8 @@ import { RegistrationToken, CreateRegistrationTokenRequest } from '@/types';
 import { formatDateTime } from '@/lib/utils';
 
 const TokenManagement: React.FC = () => {
+  const navigate = useNavigate();
+
   // Filters and search
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'used' | 'expired' | 'revoked'>('all');
@@ -47,6 +51,7 @@ const TokenManagement: React.FC = () => {
   const { data: stats, isLoading: isLoadingStats } = useRegistrationTokenStats();
   const createToken = useCreateRegistrationToken();
   const revokeToken = useRevokeRegistrationToken();
+  const deleteToken = useDeleteRegistrationToken();
   const cleanupTokens = useCleanupRegistrationTokens();
 
   // Reset page when filters change
@@ -57,15 +62,15 @@ const TokenManagement: React.FC = () => {
   // Form state
   const [formData, setFormData] = useState<CreateRegistrationTokenRequest>({
     label: '',
-    max_seats: 10,
-    expires_at: '',
+    expires_in: '168h', // Default 7 days
+    max_seats: 1, // Default 1 seat
   });
 
   const handleCreateToken = (e: React.FormEvent) => {
     e.preventDefault();
     createToken.mutate(formData, {
       onSuccess: () => {
-        setFormData({ label: '', max_seats: 10, expires_at: '' });
+        setFormData({ label: '', expires_in: '168h', max_seats: 1 });
         setShowCreateForm(false);
         refetch();
       },
@@ -78,10 +83,20 @@ const TokenManagement: React.FC = () => {
     }
   };
 
+  const handleDeleteToken = (tokenId: string, tokenLabel: string) => {
+    if (confirm(`⚠️ PERMANENTLY DELETE token "${tokenLabel}"? This cannot be undone!`)) {
+      deleteToken.mutate(tokenId, { onSuccess: () => refetch() });
+    }
+  };
+
   const handleCleanup = () => {
     if (confirm('Clean up all expired tokens? This cannot be undone.')) {
       cleanupTokens.mutate(undefined, { onSuccess: () => refetch() });
     }
+  };
+
+  const getServerUrl = () => {
+    return `${window.location.protocol}//${window.location.host}`;
   };
 
   const copyToClipboard = async (text: string) => {
@@ -90,32 +105,43 @@ const TokenManagement: React.FC = () => {
   };
 
   const copyInstallCommand = async (token: string) => {
-    const command = `curl -sSL https://get.redflag.dev | bash -s -- ${token}`;
+    const serverUrl = getServerUrl();
+    const command = `curl -sfL ${serverUrl}/api/v1/install/linux | bash -s -- ${token}`;
     await navigator.clipboard.writeText(command);
   };
 
   const generateInstallCommand = (token: string) => {
-    return `curl -sSL https://get.redflag.dev | bash -s -- ${token}`;
+    const serverUrl = getServerUrl();
+    return `curl -sfL ${serverUrl}/api/v1/install/linux | bash -s -- ${token}`;
   };
 
   const getStatusColor = (token: RegistrationToken) => {
-    if (!token.is_active) return 'text-gray-500';
-    if (token.expires_at && new Date(token.expires_at) < new Date()) return 'text-red-600';
-    if (token.max_seats && token.current_seats >= token.max_seats) return 'text-yellow-600';
-    return 'text-green-600';
+    if (token.status === 'revoked') return 'text-gray-500';
+    if (token.status === 'expired') return 'text-red-600';
+    if (token.status === 'used') return 'text-yellow-600';
+    if (token.status === 'active') return 'text-green-600';
+    return 'text-gray-500';
   };
 
   const getStatusText = (token: RegistrationToken) => {
-    if (!token.is_active) return 'Revoked';
-    if (token.expires_at && new Date(token.expires_at) < new Date()) return 'Expired';
-    if (token.max_seats && token.current_seats >= token.max_seats) return 'Full';
-    return 'Active';
+    if (token.status === 'revoked') return 'Revoked';
+    if (token.status === 'expired') return 'Expired';
+    if (token.status === 'used') return 'Used';
+    if (token.status === 'active') return 'Active';
+    return token.status.charAt(0).toUpperCase() + token.status.slice(1);
   };
 
   const filteredTokens = tokensData?.tokens || [];
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
+      <button
+        onClick={() => navigate('/settings')}
+        className="text-sm text-gray-500 hover:text-gray-700 mb-4"
+      >
+        ← Back to Settings
+      </button>
+
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between">
@@ -220,32 +246,37 @@ const TokenManagement: React.FC = () => {
                   required
                   value={formData.label}
                   onChange={(e) => setFormData({ ...formData, label: e.target.value })}
-                  placeholder="e.g., Production Team"
+                  placeholder="e.g., Production Servers, Development Team"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Max Seats</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Expires In</label>
+                <select
+                  value={formData.expires_in}
+                  onChange={(e) => setFormData({ ...formData, expires_in: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="24h">24 hours</option>
+                  <option value="72h">3 days</option>
+                  <option value="168h">7 days (1 week)</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500">Maximum 7 days per server security policy</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Max Seats (Agents)</label>
                 <input
                   type="number"
                   min="1"
-                  value={formData.max_seats}
-                  onChange={(e) => setFormData({ ...formData, max_seats: e.target.value ? parseInt(e.target.value) : undefined })}
-                  placeholder="Leave empty for unlimited"
+                  max="100"
+                  value={formData.max_seats || 1}
+                  onChange={(e) => setFormData({ ...formData, max_seats: parseInt(e.target.value) || 1 })}
+                  placeholder="1"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Expiration Date</label>
-                <input
-                  type="datetime-local"
-                  value={formData.expires_at}
-                  onChange={(e) => setFormData({ ...formData, expires_at: e.target.value })}
-                  min={new Date().toISOString().slice(0, 16)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <p className="mt-1 text-xs text-gray-500">Number of agents that can use this token</p>
               </div>
             </div>
 
@@ -403,27 +434,24 @@ const TokenManagement: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {token.current_seats}
-                        {token.max_seats && ` / ${token.max_seats}`}
+                      <div className="text-sm text-gray-500">
+                        {token.seats_used}/{token.max_seats} used
+                        {token.seats_used >= token.max_seats && (
+                          <span className="ml-2 text-xs text-red-600">(Full)</span>
+                        )}
+                        {token.seats_used < token.max_seats && token.status === 'active' && (
+                          <span className="ml-2 text-xs text-green-600">({token.max_seats - token.seats_used} available)</span>
+                        )}
                       </div>
-                      {token.max_seats && (
-                        <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                          <div
-                            className="bg-blue-600 h-2 rounded-full"
-                            style={{ width: `${Math.min((token.current_seats / token.max_seats) * 100, 100)}%` }}
-                          ></div>
-                        </div>
-                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDateTime(token.created_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDateTime(token.expires_at) || 'Never'}
+                      {formatDateTime(token.expires_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDateTime(token.last_used_at) || 'Never'}
+                      {token.used_at ? formatDateTime(token.used_at) : 'Never'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center gap-2">
@@ -441,16 +469,24 @@ const TokenManagement: React.FC = () => {
                         >
                           <Download className="w-4 h-4" />
                         </button>
-                        {token.is_active && (
+                        {token.status === 'active' && (
                           <button
-                            onClick={() => handleRevokeToken(token.id, token.label)}
+                            onClick={() => handleRevokeToken(token.id, token.label || 'this token')}
                             disabled={revokeToken.isPending}
-                            className="text-red-600 hover:text-red-800 disabled:opacity-50"
-                            title="Revoke token"
+                            className="text-orange-600 hover:text-orange-800 disabled:opacity-50"
+                            title="Revoke token (soft delete)"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <AlertTriangle className="w-4 h-4" />
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDeleteToken(token.id, token.label || 'this token')}
+                          disabled={deleteToken.isPending}
+                          className="text-red-600 hover:text-red-800 disabled:opacity-50"
+                          title="Permanently delete token"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>

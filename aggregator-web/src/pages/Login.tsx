@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Shield } from 'lucide-react';
+import { Eye, EyeOff, Shield, User } from 'lucide-react';
 import { useAuthStore } from '@/lib/store';
 import { authApi } from '@/lib/api';
 import { handleApiError } from '@/lib/api';
@@ -9,24 +9,31 @@ import toast from 'react-hot-toast';
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const { setToken } = useAuthStore();
-  const [token, setTokenInput] = useState('');
-  const [showToken, setShowToken] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!token.trim()) {
-      toast.error('Please enter your authentication token');
+    if (!username.trim()) {
+      toast.error('Please enter your username');
+      return;
+    }
+
+    if (!password.trim()) {
+      toast.error('Please enter your password');
       return;
     }
 
     setIsLoading(true);
     try {
-      const response = await authApi.login({ token: token.trim() });
+      const response = await authApi.login({ username: username.trim(), password: password.trim() });
       setToken(response.token);
       localStorage.setItem('auth_token', response.token);
-      toast.success('Login successful');
+      localStorage.setItem('user', JSON.stringify(response.user));
+      toast.success(`Welcome back, ${response.user.username}!`);
       navigate('/');
     } catch (error) {
       const apiError = handleApiError(error);
@@ -48,7 +55,7 @@ const Login: React.FC = () => {
           Sign in to RedFlag
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
-          Enter your authentication token to access the dashboard
+          Enter your username and password to access the dashboard
         </p>
       </div>
 
@@ -56,25 +63,45 @@ const Login: React.FC = () => {
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="token" className="block text-sm font-medium text-gray-700">
-                Authentication Token
+              <label htmlFor="username" className="block text-sm font-medium text-gray-700">
+                Username
+              </label>
+              <div className="mt-1 relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <User className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  id="username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="appearance-none block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                  placeholder="Enter your username"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                Password
               </label>
               <div className="mt-1 relative">
                 <input
-                  id="token"
-                  type={showToken ? 'text' : 'password'}
-                  value={token}
-                  onChange={(e) => setTokenInput(e.target.value)}
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                  placeholder="Enter your JWT token"
+                  placeholder="Enter your password"
                   required
                 />
                 <button
                   type="button"
                   className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                  onClick={() => setShowToken(!showToken)}
+                  onClick={() => setShowPassword(!showPassword)}
                 >
-                  {showToken ? (
+                  {showPassword ? (
                     <EyeOff className="h-5 w-5 text-gray-400" />
                   ) : (
                     <Eye className="h-5 w-5 text-gray-400" />
@@ -106,11 +133,11 @@ const Login: React.FC = () => {
               <div className="flex items-start space-x-2">
                 <Shield className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />
                 <div>
-                  <p className="font-medium">How to get your token:</p>
+                  <p className="font-medium">Login credentials:</p>
                   <ul className="mt-1 list-disc list-inside space-y-1 text-xs">
-                    <li>Check your RedFlag server configuration</li>
-                    <li>Look for the JWT secret in your server settings</li>
-                    <li>Generate a token using the server CLI</li>
+                    <li>Use the admin username you configured during server setup</li>
+                    <li>Enter the password you set during server configuration</li>
+                    <li>If you forgot your credentials, check your server configuration</li>
                     <li>Contact your administrator if you need access</li>
                   </ul>
                 </div>

@@ -16,20 +16,9 @@ export const useHeartbeatStatus = (agentId: string, enabled: boolean = true): Us
     queryKey: ['heartbeat', agentId],
     queryFn: () => agentApi.getHeartbeatStatus(agentId),
     enabled: enabled && !!agentId,
-    staleTime: 5000, // Consider data stale after 5 seconds
-    refetchInterval: (query) => {
-      // Smart polling: only poll when heartbeat is active
-      const data = query.state.data as HeartbeatStatus | undefined;
-
-      // If heartbeat is enabled and still active, poll every 5 seconds
-      if (data?.enabled && data?.active) {
-        return 5000; // 5 seconds
-      }
-
-      // If heartbeat is not active, don't poll
-      return false;
-    },
-    refetchOnWindowFocus: false, // Don't refresh when window gains focus
+    staleTime: 0, // Always consider data stale to force refetch
+    refetchInterval: 5000, // Poll every 5 seconds regardless of state
+    refetchOnWindowFocus: true, // Refresh when window gains focus
     refetchOnMount: true, // Always refetch when component mounts
   });
 };

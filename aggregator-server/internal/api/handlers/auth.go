@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/database/queries"
+	"github.com/Fimeg/RedFlag/aggregator-server/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -12,29 +14,35 @@ import (
 
 // AuthHandler handles authentication for the web dashboard
 type AuthHandler struct {
-	jwtSecret string
+	jwtSecret   string
+	userQueries *queries.UserQueries
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(jwtSecret string) *AuthHandler {
+func NewAuthHandler(jwtSecret string, userQueries *queries.UserQueries) *AuthHandler {
 	return &AuthHandler{
-		jwtSecret: jwtSecret,
+		jwtSecret:   jwtSecret,
+		userQueries: userQueries,
 	}
 }
 
 // LoginRequest represents a login request
 type LoginRequest struct {
-	Token string `json:"token" binding:"required"`
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
 }
 
 // LoginResponse represents a login response
 type LoginResponse struct {
-	Token string `json:"token"`
+	Token string     `json:"token"`
+	User  *models.User `json:"user"`
 }
 
 // UserClaims represents JWT claims for web dashboard users
 type UserClaims struct {
-	UserID uuid.UUID `json:"user_id"`
+	UserID   uuid.UUID `json:"user_id"`
+	Username string    `json:"username"`
+	Role     string    `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -46,16 +54,18 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// For development, accept any non-empty token
-	// In production, implement proper authentication
-	if req.Token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+	// Validate credentials against database
+	user, err := h.userQueries.VerifyCredentials(req.Username, req.Password)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}
 
 	// Create JWT token for web dashboard
 	claims := UserClaims{
-		UserID: uuid.New(), // Generate a user ID for this session
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -69,7 +79,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, LoginResponse{Token: tokenString})
+	c.JSON(http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  user,
+	})
 }
 
 // VerifyToken handles token verification

@@ -83,11 +83,11 @@ const Settings: React.FC = () => {
     },
     {
       title: 'Agent Management',
-      description: 'Agent defaults and cleanup policies',
+      description: 'Deploy and configure agents across platforms',
       icon: SettingsIcon,
       href: '/settings/agents',
       stats: null,
-      status: 'not-implemented'
+      status: 'implemented'
     }
   ];
 
@@ -134,14 +134,17 @@ const Settings: React.FC = () => {
           <p className="text-sm text-gray-400 mt-1">Coming soon</p>
         </div>
 
-        <div className="p-6 bg-gray-50 border border-gray-200 rounded-lg opacity-60">
+        <Link
+          to="/settings/agents"
+          className="block p-6 bg-white border border-gray-200 rounded-lg hover:border-purple-300 hover:shadow-sm transition-all"
+        >
           <div className="flex items-center justify-between mb-4">
-            <SettingsIcon className="w-8 h-8 text-gray-400" />
-            <ArrowRight className="w-5 h-5 text-gray-300" />
+            <SettingsIcon className="w-8 h-8 text-purple-600" />
+            <ArrowRight className="w-5 h-5 text-gray-400" />
           </div>
-          <h3 className="font-semibold text-gray-500">Agent Management</h3>
-          <p className="text-sm text-gray-400 mt-1">Coming soon</p>
-        </div>
+          <h3 className="font-semibold text-gray-900">Agent Management</h3>
+          <p className="text-sm text-gray-600 mt-1">Deploy and configure agents</p>
+        </Link>
       </div>
 
       {/* Overview Statistics */}
@@ -326,7 +329,6 @@ const Settings: React.FC = () => {
             <h3 className="font-medium text-yellow-800 mb-3">🚧 Planned Features</h3>
             <ul className="space-y-1 text-sm text-yellow-700">
               <li>• System configuration management</li>
-              <li>• Agent management settings</li>
               <li>• Integration with third-party services</li>
               <li>• Persistent settings storage</li>
             </ul>

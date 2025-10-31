@@ -292,20 +292,24 @@ export interface ApiError {
 export interface RegistrationToken {
   id: string;
   token: string;
-  label: string;
-  expires_at: string | null;
-  max_seats: number | null;
-  current_seats: number;
-  is_active: boolean;
+  label: string | null;
+  expires_at: string;
   created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
+  used_at: string | null;
+  used_by_agent_id: string | null;
+  revoked: boolean;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+  status: 'active' | 'used' | 'expired' | 'revoked';
+  created_by: string;
   metadata: Record<string, any>;
+  max_seats: number;
+  seats_used: number;
 }
 
 export interface CreateRegistrationTokenRequest {
   label: string;
-  expires_at?: string;
+  expires_in?: string;
   max_seats?: number;
   metadata?: Record<string, any>;
 }

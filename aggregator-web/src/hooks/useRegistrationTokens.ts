@@ -85,6 +85,24 @@ export const useRevokeRegistrationToken = () => {
   });
 };
 
+export const useDeleteRegistrationToken = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => adminApi.tokens.deleteToken(id),
+    onSuccess: (_, tokenId) => {
+      toast.success('Registration token deleted successfully');
+      queryClient.invalidateQueries({ queryKey: registrationTokenKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: registrationTokenKeys.detail(tokenId) });
+      queryClient.invalidateQueries({ queryKey: registrationTokenKeys.stats() });
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete registration token:', error);
+      toast.error(error.response?.data?.message || 'Failed to delete registration token');
+    },
+  });
+};
+
 export const useCleanupRegistrationTokens = () => {
   const queryClient = useQueryClient();
 

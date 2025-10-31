@@ -46,12 +46,13 @@ func (c *Client) SetToken(token string) {
 
 // RegisterRequest is the payload for agent registration
 type RegisterRequest struct {
-	Hostname       string            `json:"hostname"`
-	OSType         string            `json:"os_type"`
-	OSVersion      string            `json:"os_version"`
-	OSArchitecture string            `json:"os_architecture"`
-	AgentVersion   string            `json:"agent_version"`
-	Metadata       map[string]string `json:"metadata"`
+	Hostname         string            `json:"hostname"`
+	OSType           string            `json:"os_type"`
+	OSVersion        string            `json:"os_version"`
+	OSArchitecture   string            `json:"os_architecture"`
+	AgentVersion     string            `json:"agent_version"`
+	RegistrationToken string           `json:"registration_token,omitempty"` // Fallback method
+	Metadata         map[string]string `json:"metadata"`
 }
 
 // RegisterResponse is returned after successful registration
@@ -66,6 +67,12 @@ type RegisterResponse struct {
 func (c *Client) Register(req RegisterRequest) (*RegisterResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/agents/register", c.baseURL)
 
+	// If we have a registration token, include it in the request
+	// Registration tokens are longer than regular JWT tokens (usually 64 chars vs JWT ~400 chars)
+	if c.token != "" && len(c.token) > 40 {
+		req.RegistrationToken = c.token
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -76,6 +83,12 @@ func (c *Client) Register(req RegisterRequest) (*RegisterResponse, error) {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Add Authorization header if we have a registration token (preferred method)
+	// Registration tokens are longer than regular JWT tokens (usually 64 chars vs JWT ~400 chars)
+	if c.token != "" && len(c.token) > 40 {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

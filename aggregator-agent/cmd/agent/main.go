@@ -16,12 +16,13 @@ import (
 	"github.com/Fimeg/RedFlag/aggregator-agent/internal/display"
 	"github.com/Fimeg/RedFlag/aggregator-agent/internal/installer"
 	"github.com/Fimeg/RedFlag/aggregator-agent/internal/scanner"
+	"github.com/Fimeg/RedFlag/aggregator-agent/internal/service"
 	"github.com/Fimeg/RedFlag/aggregator-agent/internal/system"
 	"github.com/google/uuid"
 )
 
 const (
-	AgentVersion = "0.1.16" // Enhanced configuration system with proxy support and registration tokens
+	AgentVersion = "0.1.17" // Fixed Linux disk detection to show all physical mount points (/, /home, etc.)
 )
 
 // getConfigPath returns the platform-specific config path
@@ -86,6 +87,13 @@ func main() {
 	displayName := flag.String("name", "", "Display name for agent")
 	insecureTLS := flag.Bool("insecure-tls", false, "Skip TLS certificate verification")
 	exportFormat := flag.String("export", "", "Export format: json, csv")
+
+	// Windows service management commands
+	installServiceCmd := flag.Bool("install-service", false, "Install as Windows service")
+	removeServiceCmd := flag.Bool("remove-service", false, "Remove Windows service")
+	startServiceCmd := flag.Bool("start-service", false, "Start Windows service")
+	stopServiceCmd := flag.Bool("stop-service", false, "Stop Windows service")
+	serviceStatusCmd := flag.Bool("service-status", false, "Show Windows service status")
 	flag.Parse()
 
 	// Handle version command
@@ -93,6 +101,48 @@ func main() {
 		fmt.Printf("RedFlag Agent v%s\n", AgentVersion)
 		fmt.Printf("Self-hosted update management platform\n")
 		os.Exit(0)
+	}
+
+	// Handle Windows service management commands (only on Windows)
+	if runtime.GOOS == "windows" {
+		if *installServiceCmd {
+			if err := service.InstallService(); err != nil {
+				log.Fatalf("Failed to install service: %v", err)
+			}
+			fmt.Println("RedFlag service installed successfully")
+			os.Exit(0)
+		}
+
+		if *removeServiceCmd {
+			if err := service.RemoveService(); err != nil {
+				log.Fatalf("Failed to remove service: %v", err)
+			}
+			fmt.Println("RedFlag service removed successfully")
+			os.Exit(0)
+		}
+
+		if *startServiceCmd {
+			if err := service.StartService(); err != nil {
+				log.Fatalf("Failed to start service: %v", err)
+			}
+			fmt.Println("RedFlag service started successfully")
+			os.Exit(0)
+		}
+
+		if *stopServiceCmd {
+			if err := service.StopService(); err != nil {
+				log.Fatalf("Failed to stop service: %v", err)
+			}
+			fmt.Println("RedFlag service stopped successfully")
+			os.Exit(0)
+		}
+
+		if *serviceStatusCmd {
+			if err := service.ServiceStatus(); err != nil {
+				log.Fatalf("Failed to get service status: %v", err)
+			}
+			os.Exit(0)
+		}
 	}
 
 	// Parse tags from comma-separated string
@@ -197,7 +247,16 @@ func main() {
 		log.Fatal("Agent not registered. Run with -register flag first.")
 	}
 
-	// Start agent service
+	// Check if running as Windows service
+	if runtime.GOOS == "windows" && service.IsService() {
+		// Run as Windows service
+		if err := service.RunService(cfg); err != nil {
+			log.Fatal("Service failed:", err)
+		}
+		return
+	}
+
+	// Start agent service (console mode)
 	if err := runAgent(cfg); err != nil {
 		log.Fatal("Agent failed:", err)
 	}
@@ -221,7 +280,8 @@ func registerAgent(cfg *config.Config, serverURL string) error {
 		}
 	}
 
-	apiClient := client.NewClient(serverURL, "")
+	// Use registration token from config if available
+	apiClient := client.NewClient(serverURL, cfg.RegistrationToken)
 
 	// Create metadata with system information
 	metadata := map[string]string{

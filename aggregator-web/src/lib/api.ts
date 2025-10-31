@@ -24,8 +24,8 @@ import {
   RateLimitSummary
 } from '@/types';
 
-// Base URL for API
-export const API_BASE_URL = (import.meta.env?.VITE_API_URL as string) || '/api/v1';
+// Base URL for API - use nginx proxy
+export const API_BASE_URL = '/api/v1';
 
 // Create axios instance
 const api = axios.create({
@@ -237,8 +237,8 @@ export const logApi = {
 };
 
 export const authApi = {
-  // Simple login (using API key or token)
-  login: async (credentials: { token: string }): Promise<{ token: string }> => {
+  // Login with username and password
+  login: async (credentials: { username: string; password: string }): Promise<{ token: string; user: any }> => {
     const response = await api.post('/auth/login', credentials);
     return response.data;
   },
@@ -255,9 +255,9 @@ export const authApi = {
   },
 };
 
-// Setup API for server configuration (uses base API without auth)
+// Setup API for server configuration (uses nginx proxy)
 const setupApiInstance = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: '/api',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -283,8 +283,8 @@ export const setupApi = {
     serverHost: string;
     serverPort: string;
     maxSeats: string;
-  }): Promise<{ message: string; configPath?: string; restart?: boolean }> => {
-    const response = await setupApiInstance.post('/setup', config);
+  }): Promise<{ message: string; jwtSecret?: string; envContent?: string; manualRestartRequired?: boolean; manualRestartCommand?: string; configFilePath?: string }> => {
+    const response = await setupApiInstance.post('/setup/configure', config);
     return response.data;
   },
 };
@@ -456,9 +456,14 @@ export const adminApi = {
       return response.data;
     },
 
-    // Revoke registration token
+    // Revoke registration token (soft delete)
     revokeToken: async (id: string): Promise<void> => {
       await api.delete(`/admin/registration-tokens/${id}`);
+    },
+
+    // Delete registration token (hard delete)
+    deleteToken: async (id: string): Promise<void> => {
+      await api.delete(`/admin/registration-tokens/delete/${id}`);
     },
 
     // Get registration token statistics
@@ -479,7 +484,17 @@ export const adminApi = {
     // Get all rate limit configurations
     getConfigs: async (): Promise<RateLimitConfig[]> => {
       const response = await api.get('/admin/rate-limits');
-      return response.data;
+
+      // Backend returns { settings: {...}, updated_at: "..." }
+      // Transform settings object to array format expected by frontend
+      const settings = response.data.settings || {};
+      const configs: RateLimitConfig[] = Object.entries(settings).map(([endpoint, config]: [string, any]) => ({
+        ...config,
+        endpoint,
+        updated_at: response.data.updated_at, // Preserve update timestamp
+      }));
+
+      return configs;
     },
 
     // Update rate limit configuration
