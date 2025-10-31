@@ -2,7 +2,7 @@
 ALTER TABLE agents
 ADD COLUMN reboot_required BOOLEAN DEFAULT FALSE,
 ADD COLUMN last_reboot_at TIMESTAMP,
-ADD COLUMN reboot_reason TEXT;
+ADD COLUMN reboot_reason TEXT DEFAULT '';
 
 -- Add index for efficient querying of agents needing reboot
 CREATE INDEX idx_agents_reboot_required ON agents(reboot_required) WHERE reboot_required = TRUE;

@@ -23,8 +23,8 @@ type Agent struct {
 	Status         string     `json:"status" db:"status"`
 	Metadata       JSONB      `json:"metadata" db:"metadata"`
 	RebootRequired bool       `json:"reboot_required" db:"reboot_required"`
-	LastRebootAt   *time.Time `json:"last_reboot_at" db:"last_reboot_at"`
-	RebootReason   string     `json:"reboot_reason" db:"reboot_reason"`
+	LastRebootAt   *time.Time `json:"last_reboot_at,omitempty" db:"last_reboot_at"`
+	RebootReason   *string    `json:"reboot_reason,omitempty" db:"reboot_reason"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
 }
@@ -44,8 +44,8 @@ type AgentWithLastScan struct {
 	Status         string     `json:"status" db:"status"`
 	Metadata       JSONB      `json:"metadata" db:"metadata"`
 	RebootRequired bool       `json:"reboot_required" db:"reboot_required"`
-	LastRebootAt   *time.Time `json:"last_reboot_at" db:"last_reboot_at"`
-	RebootReason   string     `json:"reboot_reason" db:"reboot_reason"`
+	LastRebootAt   *time.Time `json:"last_reboot_at,omitempty" db:"last_reboot_at"`
+	RebootReason   *string    `json:"reboot_reason,omitempty" db:"reboot_reason"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
 	LastScan       *time.Time `json:"last_scan" db:"last_scan"`

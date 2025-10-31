@@ -109,6 +109,41 @@ Get registration tokens from the web dashboard under **Settings → Token Manage
 
 ---
 
+### Full Reinstall (Nuclear Option)
+
+If things get really broken or you want to start completely fresh:
+
+```bash
+docker-compose down -v --remove-orphans && \
+  rm config/.env && \
+  docker-compose build --no-cache && \
+  cp config/.env.bootstrap.example config/.env && \
+  docker-compose up -d
+```
+
+**What this does:**
+- `down -v` - Stops containers and **wipes all data** (including the database)
+- `--remove-orphans` - Cleans up leftover containers
+- `rm config/.env` - Removes old server config
+- `build --no-cache` - Rebuilds images from scratch
+- `cp config/.env.bootstrap.example` - Resets to bootstrap mode for setup wizard
+- `up -d` - Starts fresh in background
+
+**Warning:** This deletes everything - all agents, update history, configurations. You'll need to handle existing agents:
+
+**Option 1 - Re-register agents:**
+- Remove agent config: `sudo rm /etc/aggregator/config.json` (Linux) or `C:\ProgramData\RedFlag\config.json` (Windows)
+- Re-run the one-liner installer with new registration token
+- Scripts handle override/update automatically (one agent per OS install)
+
+**Option 2 - Clean uninstall/reinstall:**
+- Uninstall agent completely first
+- Then run installer with new token
+
+The one-liner scripts should work for updates unless there are breaking changes between versions.
+
+---
+
 ## Key Features
 
 ✓ **Secure by Default** - Registration tokens, JWT auth, rate limiting
