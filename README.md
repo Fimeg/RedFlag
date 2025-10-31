@@ -65,18 +65,21 @@ RedFlag lets you manage software updates across all your servers from one dashbo
 ### Server Deployment (Docker)
 
 ```bash
-# Clone and start
+# Clone and configure
 git clone https://github.com/Fimeg/RedFlag.git
 cd RedFlag
+cp config/.env.bootstrap.example config/.env
+docker-compose build
 docker-compose up -d
 
-# Access web UI
+# Access web UI and run setup
 open http://localhost:3000
+# Follow setup wizard, then copy generated .env content
 
-# Follow setup wizard to create admin account
+# Restart with new configuration
+docker-compose down
+docker-compose up -d
 ```
-
-The setup wizard runs automatically on first launch. It'll generate secure secrets and walk you through creating an admin account.
 
 ---
 

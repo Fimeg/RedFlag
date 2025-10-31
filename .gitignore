@@ -129,6 +129,12 @@ web_modules/
 .env.production.local
 .env.local
 
+# Config folder - keep only bootstrap example
+config/.env
+
+# Test files
+test-agent
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
