@@ -30,8 +30,8 @@ type DashboardStats struct {
 	PendingUpdates   int            `json:"pending_updates"`
 	FailedUpdates    int            `json:"failed_updates"`
 	CriticalUpdates  int            `json:"critical_updates"`
-	ImportantUpdates int            `json:"important_updates"`
-	ModerateUpdates  int            `json:"moderate_updates"`
+	ImportantUpdates int            `json:"high_updates"`
+	ModerateUpdates  int            `json:"medium_updates"`
 	LowUpdates       int            `json:"low_updates"`
 	UpdatesByType    map[string]int `json:"updates_by_type"`
 }
