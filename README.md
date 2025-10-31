@@ -37,9 +37,9 @@ RedFlag lets you manage software updates across all your servers from one dashbo
 |-----------|---------------|-------------------|
 | ![Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png) | ![Linux Agent](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Updates](Screenshots/RedFlag%20Updates%20Dashboard.png) |
 
-| Windows Update History | History Tracking | Docker Integration |
-|------------------------|------------------|-------------------|
-| ![Windows History](Screenshots/RedFlag%20Windows%20Agent%20History%20Extended.png) | ![History](Screenshots/RedFlag%20History%20Dashboard.png) | ![Docker](Screenshots/RedFlag%20Docker%20Dashboard.png) |
+| Live Operations |
+|-----------------|
+| ![Live Ops](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png) |
 
 <details>
 <summary><b>More Screenshots</b> (click to expand)</summary>
@@ -52,9 +52,9 @@ RedFlag lets you manage software updates across all your servers from one dashbo
 |---------------------|----------------------|------------|
 | ![Linux History](Screenshots/RedFlag%20Linux%20Agent%20History%20Extended.png) | ![Windows Agent](Screenshots/RedFlag%20Windows%20Agent%20Details.png) | ![Agent List](Screenshots/RedFlag%20Agent%20List.png) |
 
-| Live Operations |
-|-----------------|
-| ![Live Ops](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png) |
+| Windows Update History | History Tracking | Docker Integration |
+|------------------------|------------------|-------------------|
+| ![Windows History](Screenshots/RedFlag%20Windows%20Agent%20History%20Extended.png) | ![History](Screenshots/RedFlag%20History%20Dashboard.png) | ![Docker](Screenshots/RedFlag%20Docker%20Dashboard.png) |
 
 </details>
 
@@ -191,7 +191,6 @@ For production deployments:
 **Planned Features:**
 - Proxmox VM/container integration
 - Agent auto-update system
-- WebSocket real-time updates
 - Mobile-responsive dashboard improvements
 
 ---

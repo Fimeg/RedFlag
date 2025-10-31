@@ -23,8 +23,11 @@ func startWelcomeModeServer() {
 	// Add CORS middleware
 	router.Use(middleware.CORSMiddleware())
 
-	// Health check (both endpoints for compatibility)
+	// Health check (all endpoints for compatibility)
 	router.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "waiting for configuration"})
+	})
+	router.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "waiting for configuration"})
 	})
 	router.GET("/api/v1/health", func(c *gin.Context) {
@@ -157,6 +160,9 @@ func main() {
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "healthy"})
+	})
+	router.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "healthy"})
 	})
 
