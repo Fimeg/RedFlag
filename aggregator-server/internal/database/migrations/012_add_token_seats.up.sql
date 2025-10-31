@@ -63,7 +63,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Update mark_registration_token_used function to increment seats
-CREATE OR REPLACE FUNCTION mark_registration_token_used(token_input VARCHAR, agent_id_param UUID)
+DROP FUNCTION IF EXISTS mark_registration_token_used(VARCHAR, UUID);
+CREATE FUNCTION mark_registration_token_used(token_input VARCHAR, agent_id_param UUID)
 RETURNS BOOLEAN AS $$
 DECLARE
     rows_updated INTEGER;  -- Fixed: Changed from BOOLEAN to INTEGER to match ROW_COUNT type
