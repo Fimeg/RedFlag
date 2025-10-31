@@ -37,9 +37,26 @@ RedFlag lets you manage software updates across all your servers from one dashbo
 |-----------|---------------|-------------------|
 | ![Dashboard](Screenshots/RedFlag%20Default%20Dashboard.png) | ![Linux Agent](Screenshots/RedFlag%20Linux%20Agent%20Details.png) | ![Updates](Screenshots/RedFlag%20Updates%20Dashboard.png) |
 
-| Windows Support | History Tracking | Docker Integration |
-|-----------------|------------------|-------------------|
-| ![Windows Agent](Screenshots/RedFlag%20Windows%20Agent%20Details.png) | ![History](Screenshots/RedFlag%20History%20Dashboard.png) | ![Docker](Screenshots/RedFlag%20Docker%20Dashboard.png) |
+| Windows Update History | History Tracking | Docker Integration |
+|------------------------|------------------|-------------------|
+| ![Windows History](Screenshots/RedFlag%20Windows%20Agent%20History%20Extended.png) | ![History](Screenshots/RedFlag%20History%20Dashboard.png) | ![Docker](Screenshots/RedFlag%20Docker%20Dashboard.png) |
+
+<details>
+<summary><b>More Screenshots</b> (click to expand)</summary>
+
+| Heartbeat System | Registration Tokens | Settings Page |
+|------------------|---------------------|---------------|
+| ![Heartbeat](Screenshots/RedFlag%20Heartbeat%20System.png) | ![Tokens](Screenshots/RedFlag%20Registration%20Tokens.jpg) | ![Settings](Screenshots/RedFlag%20Settings%20Page.jpg) |
+
+| Linux Update History | Windows Agent Details | Agent List |
+|---------------------|----------------------|------------|
+| ![Linux History](Screenshots/RedFlag%20Linux%20Agent%20History%20Extended.png) | ![Windows Agent](Screenshots/RedFlag%20Windows%20Agent%20Details.png) | ![Agent List](Screenshots/RedFlag%20Agent%20List.png) |
+
+| Live Operations |
+|-----------------|
+| ![Live Ops](Screenshots/RedFlag%20Live%20Operations%20-%20Failed%20Dashboard.png) |
+
+</details>
 
 ---
 
