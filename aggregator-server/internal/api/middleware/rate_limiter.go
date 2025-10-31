@@ -136,8 +136,11 @@ func (rl *RateLimiter) RateLimit(limitType string, keyFunc func(*gin.Context) st
 			return
 		}
 
+		// Namespace the key by limit type to prevent different endpoints from sharing counters
+		namespacedKey := limitType + ":" + key
+
 		// Check rate limit
-		allowed, resetTime := rl.checkRateLimit(key, config)
+		allowed, resetTime := rl.checkRateLimit(namespacedKey, config)
 		if !allowed {
 			c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", config.Requests))
 			c.Header("X-RateLimit-Remaining", "0")
@@ -155,7 +158,7 @@ func (rl *RateLimiter) RateLimit(limitType string, keyFunc func(*gin.Context) st
 		}
 
 		// Add rate limit headers
-		remaining := rl.getRemainingRequests(key, config)
+		remaining := rl.getRemainingRequests(namespacedKey, config)
 		c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", config.Requests))
 		c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 		c.Header("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(config.Window).Unix()))
