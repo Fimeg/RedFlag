@@ -79,6 +79,7 @@ func (h *AgentHandler) RegisterAgent(c *gin.Context) {
 		OSVersion:      req.OSVersion,
 		OSArchitecture: req.OSArchitecture,
 		AgentVersion:   req.AgentVersion,
+		CurrentVersion: req.AgentVersion,
 		LastSeen:       time.Now(),
 		Status:         "online",
 		Metadata:       models.JSONB{},
@@ -964,5 +965,65 @@ func (h *AgentHandler) SetRapidPollingMode(c *gin.Context) {
 		"enabled": req.Enabled,
 		"duration_minutes": req.DurationMinutes,
 		"rapid_polling_until": rapidPollingUntil,
+	})
+}
+
+// TriggerReboot triggers a system reboot for an agent
+func (h *AgentHandler) TriggerReboot(c *gin.Context) {
+	agentID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	// Check if agent exists
+	agent, err := h.agentQueries.GetAgentByID(agentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Parse request body for optional parameters
+	var req struct {
+		DelayMinutes int    `json:"delay_minutes"`
+		Message      string `json:"message"`
+	}
+	c.ShouldBindJSON(&req)
+
+	// Default to 1 minute delay if not specified
+	if req.DelayMinutes == 0 {
+		req.DelayMinutes = 1
+	}
+	if req.Message == "" {
+		req.Message = "Reboot requested by RedFlag"
+	}
+
+	// Create reboot command
+	cmd := &models.AgentCommand{
+		ID:          uuid.New(),
+		AgentID:     agentID,
+		CommandType: models.CommandTypeReboot,
+		Params: models.JSONB{
+			"delay_minutes": req.DelayMinutes,
+			"message":       req.Message,
+		},
+		Status:    models.CommandStatusPending,
+		CreatedAt: time.Now(),
+	}
+
+	// Save command to database
+	if err := h.commandQueries.CreateCommand(cmd); err != nil {
+		log.Printf("Failed to create reboot command: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create reboot command"})
+		return
+	}
+
+	log.Printf("Reboot command created for agent %s (%s)", agent.Hostname, agentID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "reboot command sent",
+		"command_id": cmd.ID,
+		"agent_id":   agentID,
+		"hostname":   agent.Hostname,
 	})
 }

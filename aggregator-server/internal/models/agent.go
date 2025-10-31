@@ -19,11 +19,14 @@ type Agent struct {
 	CurrentVersion string    `json:"current_version" db:"current_version"`       // Current running version
 	UpdateAvailable bool     `json:"update_available" db:"update_available"`     // Whether update is available
 	LastVersionCheck time.Time `json:"last_version_check" db:"last_version_check"` // Last time version was checked
-	LastSeen       time.Time `json:"last_seen" db:"last_seen"`
-	Status         string    `json:"status" db:"status"`
-	Metadata       JSONB     `json:"metadata" db:"metadata"`
-	CreatedAt      time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
+	LastSeen       time.Time  `json:"last_seen" db:"last_seen"`
+	Status         string     `json:"status" db:"status"`
+	Metadata       JSONB      `json:"metadata" db:"metadata"`
+	RebootRequired bool       `json:"reboot_required" db:"reboot_required"`
+	LastRebootAt   *time.Time `json:"last_reboot_at" db:"last_reboot_at"`
+	RebootReason   string     `json:"reboot_reason" db:"reboot_reason"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // AgentWithLastScan extends Agent with last scan information
@@ -40,6 +43,9 @@ type AgentWithLastScan struct {
 	LastSeen       time.Time  `json:"last_seen" db:"last_seen"`
 	Status         string     `json:"status" db:"status"`
 	Metadata       JSONB      `json:"metadata" db:"metadata"`
+	RebootRequired bool       `json:"reboot_required" db:"reboot_required"`
+	LastRebootAt   *time.Time `json:"last_reboot_at" db:"last_reboot_at"`
+	RebootReason   string     `json:"reboot_reason" db:"reboot_reason"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
 	LastScan       *time.Time `json:"last_scan" db:"last_scan"`

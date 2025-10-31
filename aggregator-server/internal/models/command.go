@@ -50,6 +50,7 @@ const (
 	CommandTypeUpdateAgent        = "update_agent"
 	CommandTypeEnableHeartbeat    = "enable_heartbeat"
 	CommandTypeDisableHeartbeat   = "disable_heartbeat"
+	CommandTypeReboot             = "reboot"
 )
 
 // Command statuses

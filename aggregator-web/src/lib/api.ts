@@ -97,6 +97,14 @@ export const agentApi = {
     return response.data;
   },
 
+  // Trigger agent reboot
+  rebootAgent: async (id: string, delayMinutes: number = 1, message?: string): Promise<void> => {
+    await api.post(`/agents/${id}/reboot`, {
+      delay_minutes: delayMinutes,
+      message: message || 'System reboot requested by RedFlag'
+    });
+  },
+
   // Unregister/remove agent
   unregisterAgent: async (id: string): Promise<void> => {
     await api.delete(`/agents/${id}`);

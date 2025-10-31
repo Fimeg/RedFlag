@@ -21,6 +21,10 @@ export interface Agent {
   status: 'online' | 'offline';
   created_at: string;
   updated_at: string;
+  current_version?: string;
+  reboot_required?: boolean;
+  last_reboot_at?: string | null;
+  reboot_reason?: string;
   metadata?: Record<string, any>;
   // Note: ip_address not available from API yet
 }

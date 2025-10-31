@@ -204,3 +204,30 @@ func (q *AgentQueries) GetActiveAgentCount() (int, error) {
 	err := q.db.Get(&count, query)
 	return count, err
 }
+
+// UpdateAgentRebootStatus updates the reboot status for an agent
+func (q *AgentQueries) UpdateAgentRebootStatus(id uuid.UUID, required bool, reason string) error {
+	query := `
+		UPDATE agents 
+		SET reboot_required = $1, 
+		    reboot_reason = $2,
+		    updated_at = $3
+		WHERE id = $4
+	`
+	_, err := q.db.Exec(query, required, reason, time.Now(), id)
+	return err
+}
+
+// UpdateAgentLastReboot updates the last reboot timestamp for an agent
+func (q *AgentQueries) UpdateAgentLastReboot(id uuid.UUID, rebootTime time.Time) error {
+	query := `
+		UPDATE agents 
+		SET last_reboot_at = $1,
+		    reboot_required = FALSE,
+		    reboot_reason = '',
+		    updated_at = $2
+		WHERE id = $3
+	`
+	_, err := q.db.Exec(query, rebootTime, time.Now(), id)
+	return err
+}

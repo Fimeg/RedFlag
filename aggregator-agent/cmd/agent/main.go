@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -532,6 +533,11 @@ func runAgent(cfg *config.Config) error {
 					log.Printf("[Heartbeat] Error disabling heartbeat: %v\n", err)
 				}
 
+
+			case "reboot":
+				if err := handleReboot(apiClient, cfg, cmd.ID, cmd.Params); err != nil {
+					log.Printf("[Reboot] Error processing reboot command: %v\n", err)
+				}
 			default:
 				log.Printf("Unknown command type: %s\n", cmd.Type)
 			}
@@ -1395,6 +1401,94 @@ func reportSystemInfo(apiClient *client.Client, cfg *config.Config) error {
 	// Report to server
 	if err := apiClient.ReportSystemInfo(cfg.AgentID, report); err != nil {
 		return fmt.Errorf("failed to report system info: %w", err)
+	}
+
+	return nil
+}
+
+// handleReboot handles reboot command
+func handleReboot(apiClient *client.Client, cfg *config.Config, commandID string, params map[string]interface{}) error {
+	log.Println("[Reboot] Processing reboot request...")
+
+	// Parse parameters
+	delayMinutes := 1 // Default to 1 minute
+	message := "System reboot requested by RedFlag"
+
+	if delay, ok := params["delay_minutes"]; ok {
+		if delayFloat, ok := delay.(float64); ok {
+			delayMinutes = int(delayFloat)
+		}
+	}
+	if msg, ok := params["message"].(string); ok && msg != "" {
+		message = msg
+	}
+
+	log.Printf("[Reboot] Scheduling system reboot in %d minute(s): %s", delayMinutes, message)
+
+	var cmd *exec.Cmd
+
+	// Execute platform-specific reboot command
+	if runtime.GOOS == "linux" {
+		// Linux: shutdown -r +MINUTES "message"
+		cmd = exec.Command("shutdown", "-r", fmt.Sprintf("+%d", delayMinutes), message)
+	} else if runtime.GOOS == "windows" {
+		// Windows: shutdown /r /t SECONDS /c "message"
+		delaySeconds := delayMinutes * 60
+		cmd = exec.Command("shutdown", "/r", "/t", fmt.Sprintf("%d", delaySeconds), "/c", message)
+	} else {
+		err := fmt.Errorf("reboot not supported on platform: %s", runtime.GOOS)
+		log.Printf("[Reboot] Error: %v", err)
+
+		// Report failure
+		logReport := client.LogReport{
+			CommandID:       commandID,
+			Action:          "reboot",
+			Result:          "failed",
+			Stdout:          "",
+			Stderr:          err.Error(),
+			ExitCode:        1,
+			DurationSeconds: 0,
+		}
+		apiClient.ReportLog(cfg.AgentID, logReport)
+		return err
+	}
+
+	// Execute reboot command
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[Reboot] Failed to schedule reboot: %v", err)
+		log.Printf("[Reboot] Output: %s", string(output))
+
+		// Report failure
+		logReport := client.LogReport{
+			CommandID:       commandID,
+			Action:          "reboot",
+			Result:          "failed",
+			Stdout:          string(output),
+			Stderr:          err.Error(),
+			ExitCode:        1,
+			DurationSeconds: 0,
+		}
+		apiClient.ReportLog(cfg.AgentID, logReport)
+		return err
+	}
+
+	log.Printf("[Reboot] System reboot scheduled successfully")
+	log.Printf("[Reboot] The system will reboot in %d minute(s)", delayMinutes)
+
+	// Report success
+	logReport := client.LogReport{
+		CommandID:       commandID,
+		Action:          "reboot",
+		Result:          "success",
+		Stdout:          fmt.Sprintf("System reboot scheduled for %d minute(s) from now. Message: %s", delayMinutes, message),
+		Stderr:          "",
+		ExitCode:        0,
+		DurationSeconds: 0,
+	}
+
+	if reportErr := apiClient.ReportLog(cfg.AgentID, logReport); reportErr != nil {
+		log.Printf("[Reboot] Failed to report reboot command result: %v", reportErr)
 	}
 
 	return nil

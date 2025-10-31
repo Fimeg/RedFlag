@@ -21,6 +21,7 @@ import {
   CheckCircle,
   AlertCircle,
   XCircle,
+  Power,
 } from 'lucide-react';
 import { useAgents, useAgent, useScanAgent, useScanMultipleAgents, useUnregisterAgent } from '@/hooks/useAgents';
 import { useActiveCommands, useCancelCommand } from '@/hooks/useCommands';
@@ -298,6 +299,22 @@ const Agents: React.FC = () => {
     }
   };
 
+  // Handle agent reboot
+  const handleRebootAgent = async (agentId: string, hostname: string) => {
+    if (!window.confirm(
+      `Schedule a system restart for agent "${hostname}"?\n\nThe system will restart in 1 minute. Any unsaved work may be lost.`
+    )) {
+      return;
+    }
+
+    try {
+      await agentApi.rebootAgent(agentId);
+      toast.success(`Restart command sent to "${hostname}". System will restart in 1 minute.`);
+    } catch (error: any) {
+      toast.error(error.message || `Failed to send restart command to "${hostname}"`);
+    }
+  };
+
   // Handle agent removal
   const handleRemoveAgent = async (agentId: string, hostname: string) => {
     if (!window.confirm(
@@ -445,7 +462,7 @@ const Agents: React.FC = () => {
                   <span className="text-gray-500">Version:</span>
                   <div className="flex items-center space-x-1">
                     <span className="font-medium text-gray-900">
-                      {selectedAgent.current_version || 'Unknown'}
+                      {selectedAgent.current_version || 'Initial Registration'}
                     </span>
                     {selectedAgent.update_available === true && (
                       <span className="flex items-center text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
@@ -484,6 +501,26 @@ const Agents: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Restart Required Alert */}
+        {selectedAgent.reboot_required && (
+          <div className="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div className="flex items-start">
+              <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 mr-3 flex-shrink-0" />
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-amber-900">System Restart Required</h3>
+                <p className="text-sm text-amber-700 mt-1">
+                  {selectedAgent.reboot_reason || 'This system requires a restart to complete updates.'}
+                </p>
+                {selectedAgent.last_reboot_at && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Last reboot: {formatRelativeTime(selectedAgent.last_reboot_at)}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="mb-6">
@@ -948,6 +985,14 @@ const Agents: React.FC = () => {
                 </div>
 
                 <button
+                  onClick={() => handleRebootAgent(selectedAgent.id, selectedAgent.hostname)}
+                  className="w-full btn btn-warning"
+                >
+                  <Power className="h-4 w-4 mr-2" />
+                  Restart Host
+                </button>
+
+                <button
                   onClick={() => handleRemoveAgent(selectedAgent.id, selectedAgent.hostname)}
                   disabled={unregisterAgentMutation.isPending}
                   className="w-full btn btn-danger"
@@ -1157,14 +1202,22 @@ const Agents: React.FC = () => {
                       </div>
                     </td>
                     <td className="table-cell">
-                      <span className={cn('badge', getStatusColor(isOnline(agent.last_seen) ? 'online' : 'offline'))}>
-                        {isOnline(agent.last_seen) ? 'Online' : 'Offline'}
-                      </span>
+                      <div className="flex flex-col space-y-1">
+                        <span className={cn('badge', getStatusColor(isOnline(agent.last_seen) ? 'online' : 'offline'))}>
+                          {isOnline(agent.last_seen) ? 'Online' : 'Offline'}
+                        </span>
+                        {agent.reboot_required && (
+                          <span className="flex items-center text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full w-fit">
+                            <Power className="h-3 w-3 mr-1" />
+                            Restart
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="table-cell">
                       <div className="flex items-center space-x-2">
                         <span className="text-sm text-gray-900">
-                          {agent.current_version || 'Unknown'}
+                          {agent.current_version || 'Initial Registration'}
                         </span>
                         {agent.update_available === true && (
                           <span className="flex items-center text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">

@@ -206,6 +206,7 @@ func main() {
 			dashboard.POST("/agents/:id/update", agentHandler.TriggerUpdate)
 			dashboard.POST("/agents/:id/heartbeat", agentHandler.TriggerHeartbeat)
 			dashboard.GET("/agents/:id/heartbeat", agentHandler.GetHeartbeatStatus)
+			dashboard.POST("/agents/:id/reboot", agentHandler.TriggerReboot)
 			dashboard.GET("/updates", updateHandler.ListUpdates)
 			dashboard.GET("/updates/:id", updateHandler.GetUpdate)
 			dashboard.GET("/updates/:id/logs", updateHandler.GetUpdateLogs)

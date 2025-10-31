@@ -21,6 +21,8 @@ type SystemInfo struct {
 	DiskInfo       []DiskInfo        `json:"disk_info"`
 	RunningProcesses int             `json:"running_processes"`
 	Uptime         string            `json:"uptime"`
+	RebootRequired bool              `json:"reboot_required"`
+	RebootReason   string            `json:"reboot_reason"`
 	Metadata       map[string]string `json:"metadata"`
 }
 
@@ -112,6 +114,11 @@ func GetSystemInfo(agentVersion string) (*SystemInfo, error) {
 			}
 		}
 	}
+
+	// Check if system requires reboot
+	rebootRequired, rebootReason := checkRebootRequired()
+	info.RebootRequired = rebootRequired
+	info.RebootReason = rebootReason
 
 	// Add collection timestamp
 	info.Metadata["collected_at"] = time.Now().Format(time.RFC3339)
@@ -467,4 +474,64 @@ func GetLightweightMetrics() (*LightweightMetrics, error) {
 	// In the future, we could add a background goroutine to track CPU usage
 
 	return metrics, nil
+}
+// checkRebootRequired checks if the system requires a reboot
+func checkRebootRequired() (bool, string) {
+	if runtime.GOOS == "linux" {
+		return checkLinuxRebootRequired()
+	} else if runtime.GOOS == "windows" {
+		return checkWindowsRebootRequired()
+	}
+	return false, ""
+}
+
+// checkLinuxRebootRequired checks if a Linux system requires a reboot
+func checkLinuxRebootRequired() (bool, string) {
+	// Method 1: Check Debian/Ubuntu reboot-required file
+	if err := exec.Command("test", "-f", "/var/run/reboot-required").Run(); err == nil {
+		// File exists, reboot is required
+		// Try to read the packages that require reboot
+		if output, err := exec.Command("cat", "/var/run/reboot-required.pkgs").Output(); err == nil {
+			packages := strings.TrimSpace(string(output))
+			if packages != "" {
+				// Truncate if too long
+				if len(packages) > 200 {
+					packages = packages[:200] + "..."
+				}
+				return true, "Packages: " + packages
+			}
+		}
+		return true, "System updates require reboot"
+	}
+
+	// Method 2: Check RHEL/Fedora/Rocky using needs-restarting
+	cmd := exec.Command("needs-restarting", "-r")
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Exit code 1 means reboot is needed
+			if exitErr.ExitCode() == 1 {
+				return true, "Kernel or system libraries updated"
+			}
+		}
+	}
+
+	return false, ""
+}
+
+// checkWindowsRebootRequired checks if a Windows system requires a reboot
+func checkWindowsRebootRequired() (bool, string) {
+	// Check Windows Update pending reboot registry keys
+	// HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired
+	cmd := exec.Command("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired")
+	if err := cmd.Run(); err == nil {
+		return true, "Windows updates require reboot"
+	}
+
+	// Check Component Based Servicing pending reboot
+	cmd = exec.Command("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending")
+	if err := cmd.Run(); err == nil {
+		return true, "Component updates require reboot"
+	}
+
+	return false, ""
 }
