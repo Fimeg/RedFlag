@@ -16,6 +16,7 @@ import AgentManagement from '@/pages/settings/AgentManagement';
 import Login from '@/pages/Login';
 import Setup from '@/pages/Setup';
 import { WelcomeChecker } from '@/components/WelcomeChecker';
+import { SetupCompletionChecker } from '@/components/SetupCompletionChecker';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -81,7 +82,14 @@ const App: React.FC = () => {
           {/* App routes */}
       <Routes>
         {/* Setup route - shown when server needs configuration */}
-        <Route path="/setup" element={<Setup />} />
+        <Route
+          path="/setup"
+          element={
+            <SetupCompletionChecker>
+              <Setup />
+            </SetupCompletionChecker>
+          }
+        />
 
         {/* Login route */}
         <Route
