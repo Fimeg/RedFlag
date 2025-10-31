@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Settings, Database, User, Shield, Eye, EyeOff, CheckCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { setupApi } from '@/lib/api';
+import { useAuthStore } from '@/lib/store';
 
 interface SetupFormData {
   adminUser: string;
@@ -19,6 +20,7 @@ interface SetupFormData {
 
 const Setup: React.FC = () => {
   const navigate = useNavigate();
+  const { logout } = useAuthStore();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
     const [envContent, setEnvContent] = useState<string | null>(null);
@@ -106,12 +108,12 @@ const Setup: React.FC = () => {
       return;
     }
 
+    logout();
     setIsLoading(true);
 
     try {
       const result = await setupApi.configure(formData);
 
-      // Store env content and show success screen
       setEnvContent(result.envContent || null);
       setShowSuccess(true);
       toast.success(result.message || 'Configuration saved successfully!');
