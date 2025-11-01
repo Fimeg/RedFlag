@@ -12,6 +12,8 @@ Cross-platform agents • Web dashboard • Single binary deployment • No ente
 v0.1.18 - Alpha Release
 ```
 
+**Latest:** Enhanced disk detection, redesigned agent UI with workflow tabs, improved cache invalidation. Testing kernel updates on cloned test benches - help find bugs. [Update instructions below](#updating).
+
 ---
 
 ## What It Does
