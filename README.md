@@ -9,7 +9,7 @@
 Cross-platform agents • Web dashboard • Single binary deployment • No enterprise BS
 
 ```
-v0.1.17 - Alpha Release
+v0.1.18 - Alpha Release
 ```
 
 ---
@@ -109,7 +109,18 @@ Get registration tokens from the web dashboard under **Settings → Token Manage
 
 ---
 
-### Full Reinstall (Nuclear Option)
+### Updating
+
+To update to the latest version:
+
+```bash
+git pull && docker-compose down && docker-compose build --no-cache && docker-compose up -d
+```
+
+---
+
+<details>
+<summary><b>Full Reinstall (Nuclear Option)</b></summary>
 
 If things get really broken or you want to start completely fresh:
 
@@ -140,7 +151,43 @@ docker-compose down -v --remove-orphans && \
 - Uninstall agent completely first
 - Then run installer with new token
 
-The one-liner scripts should work for updates unless there are breaking changes between versions.
+</details>
+
+---
+
+<details>
+<summary><b>Full Uninstall</b></summary>
+
+**Uninstall Server:**
+```bash
+docker-compose down -v --remove-orphans
+rm config/.env
+```
+
+**Uninstall Linux Agent:**
+```bash
+# Using uninstall script (recommended)
+sudo bash aggregator-agent/uninstall.sh
+
+# Remove agent configuration
+sudo rm /etc/aggregator/config.json
+
+# Remove agent user (optional - preserves logs)
+sudo userdel -r redflag-agent
+```
+
+**Uninstall Windows Agent:**
+```powershell
+# Stop and remove service
+Stop-Service RedFlagAgent
+sc.exe delete RedFlagAgent
+
+# Remove files
+Remove-Item "C:\Program Files\RedFlag\redflag-agent.exe"
+Remove-Item "C:\ProgramData\RedFlag\config.json"
+```
+
+</details>
 
 ---
 
