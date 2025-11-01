@@ -2,6 +2,7 @@ package system
 
 import (
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -41,14 +42,18 @@ type MemoryInfo struct {
 	UsedPercent float64 `json:"used_percent"`
 }
 
-// DiskInfo contains disk information
+// DiskInfo contains disk information for modular storage management
 type DiskInfo struct {
-	Mountpoint string  `json:"mountpoint"`
-	Total      uint64  `json:"total"`
-	Available  uint64  `json:"available"`
-	Used       uint64  `json:"used"`
-	UsedPercent float64 `json:"used_percent"`
-	Filesystem string  `json:"filesystem"`
+	Mountpoint    string  `json:"mountpoint"`
+	Total         uint64  `json:"total"`
+	Available     uint64  `json:"available"`
+	Used          uint64  `json:"used"`
+	UsedPercent   float64 `json:"used_percent"`
+	Filesystem    string  `json:"filesystem"`
+	IsRoot        bool    `json:"is_root"`        // Primary system disk
+	IsLargest     bool    `json:"is_largest"`     // Largest storage disk
+	DiskType      string  `json:"disk_type"`      // SSD, HDD, NVMe, etc.
+	Device        string  `json:"device"`         // Block device name
 }
 
 // GetSystemInfo collects detailed system information
@@ -252,7 +257,7 @@ func getMemoryInfo() (*MemoryInfo, error) {
 	return mem, nil
 }
 
-// getDiskInfo gets disk information for mounted filesystems
+// getDiskInfo gets disk information for mounted filesystems with enhanced detection
 func getDiskInfo() ([]DiskInfo, error) {
 	var disks []DiskInfo
 
@@ -262,6 +267,9 @@ func getDiskInfo() ([]DiskInfo, error) {
 		if cmd, err := exec.LookPath("df"); err == nil {
 			if data, err := exec.Command(cmd, "-h", "--output=target,size,used,avail,pcent,source").Output(); err == nil {
 				lines := strings.Split(string(data), "\n")
+
+				// First pass: collect all valid disks
+				var rawDisks []DiskInfo
 				for i, line := range lines {
 					if i == 0 || strings.TrimSpace(line) == "" {
 						continue // Skip header and empty lines
@@ -305,6 +313,7 @@ func getDiskInfo() ([]DiskInfo, error) {
 						disk := DiskInfo{
 							Mountpoint: mountpoint,
 							Filesystem: filesystem,
+							Device:     filesystem,
 						}
 
 						// Parse sizes (df outputs in human readable format, we'll parse the numeric part)
@@ -321,9 +330,36 @@ func getDiskInfo() ([]DiskInfo, error) {
 							disk.UsedPercent = total
 						}
 
-						disks = append(disks, disk)
+						rawDisks = append(rawDisks, disk)
 					}
 				}
+
+				// Second pass: enhance with disk type detection and set flags
+				var largestSize uint64 = 0
+				var largestIndex int = -1
+
+				for i := range rawDisks {
+					// Detect root filesystem
+					if rawDisks[i].Mountpoint == "/" || rawDisks[i].Mountpoint == "C:" {
+						rawDisks[i].IsRoot = true
+					}
+
+					// Track largest disk
+					if rawDisks[i].Total > largestSize {
+						largestSize = rawDisks[i].Total
+						largestIndex = i
+					}
+
+					// Detect disk type
+					rawDisks[i].DiskType = detectDiskType(rawDisks[i].Device)
+				}
+
+				// Set largest disk flag
+				if largestIndex >= 0 {
+					rawDisks[largestIndex].IsLargest = true
+				}
+
+				disks = rawDisks
 			}
 		}
 	}
@@ -331,7 +367,55 @@ func getDiskInfo() ([]DiskInfo, error) {
 	return disks, nil
 }
 
-// parseSize parses human readable size strings (like "1.5G" or "500M")
+// detectDiskType determines the type of storage device (SSD, HDD, NVMe, etc.)
+func detectDiskType(device string) string {
+	if device == "" {
+		return "Unknown"
+	}
+
+	// Extract base device name (remove partition numbers like /dev/sda1 -> /dev/sda)
+	baseDevice := device
+	if strings.Contains(device, "/dev/") {
+		parts := strings.Fields(device)
+		if len(parts) > 0 {
+			baseDevice = parts[0]
+			// Remove partition numbers for common patterns
+			re := strings.NewReplacer("/dev/sda", "/dev/sda", "/dev/sdb", "/dev/sdb", "/dev/nvme0n1", "/dev/nvme0n1")
+			baseDevice = re.Replace(baseDevice)
+
+			// More robust partition removal
+			if matches := regexp.MustCompile(`^(/dev/sd[a-z]|/dev/nvme\d+n\d|/dev/hd[a-z])\d*$`).FindStringSubmatch(baseDevice); len(matches) > 1 {
+				baseDevice = matches[1]
+			}
+		}
+	}
+
+	// Check for NVMe
+	if strings.Contains(baseDevice, "nvme") {
+		return "NVMe"
+	}
+
+	// Check for SSD indicators using lsblk
+	if cmd, err := exec.LookPath("lsblk"); err == nil {
+		if data, err := exec.Command(cmd, "-d", "-o", "rota,NAME", baseDevice).Output(); err == nil {
+			output := string(data)
+			if strings.Contains(output, "0") && strings.Contains(output, baseDevice[strings.LastIndex(baseDevice, "/")+1:]) {
+				return "SSD" // rota=0 indicates non-rotating (SSD)
+			} else if strings.Contains(output, "1") && strings.Contains(output, baseDevice[strings.LastIndex(baseDevice, "/")+1:]) {
+				return "HDD" // rota=1 indicates rotating (HDD)
+			}
+		}
+	}
+
+	// Fallback detection based on device name patterns
+	if strings.Contains(baseDevice, "sd") || strings.Contains(baseDevice, "hd") {
+		return "HDD" // Traditional naming for SATA/IDE drives
+	}
+
+	return "Unknown"
+}
+
+// parseSize parses human readable size strings (like "1.5G", "500M", "3.7T")
 func parseSize(sizeStr string) (uint64, error) {
 	sizeStr = strings.TrimSpace(sizeStr)
 	if len(sizeStr) == 0 {
@@ -340,14 +424,17 @@ func parseSize(sizeStr string) (uint64, error) {
 
 	multiplier := uint64(1)
 	unit := sizeStr[len(sizeStr)-1:]
-	if unit == "G" || unit == "g" {
-		multiplier = 1024 * 1024 * 1024
+	if unit == "T" || unit == "t" {
+		multiplier = 1024 * 1024 * 1024 * 1024  // Terabyte
+		sizeStr = sizeStr[:len(sizeStr)-1]
+	} else if unit == "G" || unit == "g" {
+		multiplier = 1024 * 1024 * 1024  // Gigabyte
 		sizeStr = sizeStr[:len(sizeStr)-1]
 	} else if unit == "M" || unit == "m" {
-		multiplier = 1024 * 1024
+		multiplier = 1024 * 1024  // Megabyte
 		sizeStr = sizeStr[:len(sizeStr)-1]
 	} else if unit == "K" || unit == "k" {
-		multiplier = 1024
+		multiplier = 1024  // Kilobyte
 		sizeStr = sizeStr[:len(sizeStr)-1]
 	}
 
@@ -433,9 +520,15 @@ type LightweightMetrics struct {
 	MemoryPercent float64
 	MemoryUsedGB  float64
 	MemoryTotalGB float64
+	// Root filesystem disk info (primary disk)
 	DiskUsedGB    float64
 	DiskTotalGB   float64
 	DiskPercent   float64
+	// Largest disk info (for systems with separate data partitions)
+	LargestDiskUsedGB  float64
+	LargestDiskTotalGB float64
+	LargestDiskPercent float64
+	LargestDiskMount   string
 	Uptime        string
 }
 
@@ -451,16 +544,36 @@ func GetLightweightMetrics() (*LightweightMetrics, error) {
 		metrics.MemoryTotalGB = float64(mem.Total) / (1024 * 1024 * 1024)
 	}
 
-	// Get primary disk info (root filesystem)
+	// Get disk info (both root and largest)
 	if disks, err := getDiskInfo(); err == nil {
-		for _, disk := range disks {
-			// Look for root filesystem or first mountpoint
-			if disk.Mountpoint == "/" || disk.Mountpoint == "C:" || len(metrics.Uptime) == 0 {
-				metrics.DiskUsedGB = float64(disk.Used) / (1024 * 1024 * 1024)
-				metrics.DiskTotalGB = float64(disk.Total) / (1024 * 1024 * 1024)
-				metrics.DiskPercent = disk.UsedPercent
-				break
+		var rootDisk *DiskInfo
+		var largestDisk *DiskInfo
+
+		for i, disk := range disks {
+			// Find root filesystem
+			if disk.Mountpoint == "/" || disk.Mountpoint == "C:" {
+				rootDisk = &disks[i]
 			}
+
+			// Track largest disk
+			if largestDisk == nil || disk.Total > largestDisk.Total {
+				largestDisk = &disks[i]
+			}
+		}
+
+		// Set root disk metrics (primary disk)
+		if rootDisk != nil {
+			metrics.DiskUsedGB = float64(rootDisk.Used) / (1024 * 1024 * 1024)
+			metrics.DiskTotalGB = float64(rootDisk.Total) / (1024 * 1024 * 1024)
+			metrics.DiskPercent = rootDisk.UsedPercent
+		}
+
+		// Set largest disk metrics (for data partitions like /home)
+		if largestDisk != nil && (rootDisk == nil || largestDisk.Total > rootDisk.Total) {
+			metrics.LargestDiskUsedGB = float64(largestDisk.Used) / (1024 * 1024 * 1024)
+			metrics.LargestDiskTotalGB = float64(largestDisk.Total) / (1024 * 1024 * 1024)
+			metrics.LargestDiskPercent = largestDisk.UsedPercent
+			metrics.LargestDiskMount = largestDisk.Mountpoint
 		}
 	}
 

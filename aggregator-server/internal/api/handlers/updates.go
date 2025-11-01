@@ -443,6 +443,7 @@ func (h *UpdateHandler) InstallUpdate(c *gin.Context) {
 			"package_type":  update.PackageType,
 		},
 		Status:       models.CommandStatusPending,
+		Source:       models.CommandSourceManual,
 		CreatedAt:     time.Now(),
 	}
 
@@ -456,6 +457,7 @@ func (h *UpdateHandler) InstallUpdate(c *gin.Context) {
 				"duration_minutes": 10,
 			},
 			Status:    models.CommandStatusPending,
+			Source:    models.CommandSourceSystem,
 			CreatedAt: time.Now(),
 		}
 
@@ -548,6 +550,7 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 				"dependencies":  []string{}, // Empty dependencies array
 			},
 			Status:    models.CommandStatusPending,
+			Source:    models.CommandSourceManual,
 			CreatedAt: time.Now(),
 		}
 
@@ -561,6 +564,7 @@ func (h *UpdateHandler) ReportDependencies(c *gin.Context) {
 					"duration_minutes": 10,
 				},
 				Status:    models.CommandStatusPending,
+				Source:    models.CommandSourceSystem,
 				CreatedAt: time.Now(),
 			}
 
@@ -628,6 +632,7 @@ func (h *UpdateHandler) ConfirmDependencies(c *gin.Context) {
 			"dependencies":  update.Metadata["dependencies"], // Dependencies stored in metadata
 		},
 		Status:       models.CommandStatusPending,
+		Source:       models.CommandSourceManual,
 		CreatedAt:     time.Now(),
 	}
 
@@ -641,6 +646,7 @@ func (h *UpdateHandler) ConfirmDependencies(c *gin.Context) {
 				"duration_minutes": 10,
 			},
 			Status:    models.CommandStatusPending,
+			Source:    models.CommandSourceSystem,
 			CreatedAt: time.Now(),
 		}
 

@@ -22,6 +22,9 @@ import {
   AlertCircle,
   XCircle,
   Power,
+  Database,
+  Settings,
+  MonitorPlay,
 } from 'lucide-react';
 import { useAgents, useAgent, useScanAgent, useScanMultipleAgents, useUnregisterAgent } from '@/hooks/useAgents';
 import { useActiveCommands, useCancelCommand } from '@/hooks/useCommands';
@@ -32,6 +35,9 @@ import { getStatusColor, formatRelativeTime, isOnline, formatBytes } from '@/lib
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import { AgentSystemUpdates } from '@/components/AgentUpdates';
+import { AgentStorage } from '@/components/AgentStorage';
+import { AgentUpdatesEnhanced } from '@/components/AgentUpdatesEnhanced';
+import { AgentScanners } from '@/components/AgentScanners';
 import ChatTimeline from '@/components/ChatTimeline';
 
 const Agents: React.FC = () => {
@@ -44,7 +50,7 @@ const Agents: React.FC = () => {
   const [osFilter, setOsFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'storage' | 'updates' | 'scanners' | 'history'>('overview');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [heartbeatDuration, setHeartbeatDuration] = useState<number>(10); // Default 10 minutes
   const [showDurationDropdown, setShowDurationDropdown] = useState(false);
@@ -522,28 +528,64 @@ const Agents: React.FC = () => {
           </div>
         )}
 
-        {/* Tabs */}
+        {/* Enhanced Tabs */}
         <div className="mb-6">
           <div className="border-b border-gray-200">
-            <nav className="-mb-px flex space-x-8">
+            <nav className="-mb-px flex space-x-1 overflow-x-auto">
               <button
                 onClick={() => setActiveTab('overview')}
                 className={cn(
-                  'py-2 px-1 border-b-2 font-medium text-sm transition-colors',
+                  'py-3 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap',
                   activeTab === 'overview'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'border-primary-500 text-primary-600 bg-primary-50 rounded-t-lg'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
                 )}
               >
-                Overview
+                <span>Overview</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('storage')}
+                className={cn(
+                  'py-3 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap flex items-center space-x-2',
+                  activeTab === 'storage'
+                    ? 'border-primary-500 text-primary-600 bg-primary-50 rounded-t-lg'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                )}
+              >
+                <HardDrive className="h-4 w-4" />
+                <span>Storage & Disks</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('updates')}
+                className={cn(
+                  'py-3 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap flex items-center space-x-2',
+                  activeTab === 'updates'
+                    ? 'border-primary-500 text-primary-600 bg-primary-50 rounded-t-lg'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                )}
+              >
+                <Package className="h-4 w-4" />
+                <span>Updates & Packages</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('scanners')}
+                className={cn(
+                  'py-3 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap flex items-center space-x-2',
+                  activeTab === 'scanners'
+                    ? 'border-primary-500 text-primary-600 bg-primary-50 rounded-t-lg'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                )}
+              >
+                <MonitorPlay className="h-4 w-4" />
+                <span>Agent Health</span>
               </button>
               <button
                 onClick={() => setActiveTab('history')}
                 className={cn(
-                  'py-2 px-1 border-b-2 font-medium text-sm transition-colors flex items-center space-x-2',
+                  'py-3 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap flex items-center space-x-2',
                   activeTab === 'history'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'border-primary-500 text-primary-600 bg-primary-50 rounded-t-lg'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 hover:bg-gray-50'
                 )}
               >
                 <HistoryIcon className="h-4 w-4" />
@@ -556,352 +598,393 @@ const Agents: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main content area */}
           <div className="lg:col-span-2">
-            {activeTab === 'overview' ? (
+            {activeTab === 'overview' && (
               <div className="space-y-6">
-            {/* Agent Status Card - Compact Timeline Style */}
-            <div className="card">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-lg font-medium text-gray-900">Agent Status</h2>
-                <div className="flex items-center space-x-2">
-                  <div className={cn(
-                    'w-3 h-3 rounded-full',
-                    isOnline(selectedAgent.last_seen) ? 'bg-green-500' : 'bg-gray-400'
-                  )}></div>
-                  <span className={cn('badge', getStatusColor(isOnline(selectedAgent.last_seen) ? 'online' : 'offline'))}>
-                    {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
-                  </span>
-                </div>
+                {/* Agent Status Card - Compact Timeline Style */}
+                <div className="card">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-medium text-gray-900">Agent Status</h2>
+                    <div className="flex items-center space-x-2">
+                      <div className={cn(
+                        'w-3 h-3 rounded-full',
+                        isOnline(selectedAgent.last_seen) ? 'bg-green-500' : 'bg-gray-400'
+                      )}></div>
+                      <span className={cn('badge', getStatusColor(isOnline(selectedAgent.last_seen) ? 'online' : 'offline'))}>
+                        {isOnline(selectedAgent.last_seen) ? 'Online' : 'Offline'}
+                      </span>
+                    </div>
 
-                {/* Heartbeat Status Indicator */}
-                <div className="flex items-center space-x-2">
-                  {(() => {
-                    // Use dedicated heartbeat status instead of general agent metadata
-                    const isRapidPolling = heartbeatStatus?.enabled && heartbeatStatus?.active;
-
-                    return (
-                      <button
-                        onClick={() => handleRapidPollingToggle(selectedAgent.id, !isRapidPolling)}
-                        disabled={heartbeatLoading}
-                        className={cn(
-                          'flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-colors',
-                          heartbeatLoading
-                            ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
-                            : isRapidPolling
-                            ? 'bg-pink-100 text-pink-800 border border-pink-200 hover:bg-pink-200 cursor-pointer'
-                            : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 cursor-pointer'
-                        )}
-                        title={heartbeatLoading ? 'Sending command...' : `Click to toggle ${isRapidPolling ? 'normal' : 'heartbeat'} mode`}
-                      >
-                        {heartbeatLoading ? (
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Activity className={cn(
-                            'h-3 w-3',
-                            isRapidPolling ? 'text-pink-600 animate-pulse' : 'text-gray-400'
-                          )} />
-                        )}
-                        <span>
-                          {heartbeatLoading ? 'Sending...' : isRapidPolling ? 'Heartbeat (5s)' : 'Normal (5m)'}
-                        </span>
-                      </button>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {/* Compact Timeline Display */}
-              <div className="space-y-2 mb-3">
-                {(() => {
-                  const agentCommands = getAgentActiveCommands();
-
-                  // Separate heartbeat commands from other commands
-                  const heartbeatCommands = agentCommands.filter(cmd =>
-                    cmd.command_type === 'enable_heartbeat' || cmd.command_type === 'disable_heartbeat'
-                  );
-                  const otherCommands = agentCommands.filter(cmd =>
-                    cmd.command_type !== 'enable_heartbeat' && cmd.command_type !== 'disable_heartbeat'
-                  );
-
-                  // For heartbeat commands: only show the MOST RECENT one, but exclude old completed ones
-                  const recentHeartbeatCommands = heartbeatCommands.filter(cmd => {
-                    const createdTime = new Date(cmd.created_at);
-                    const now = new Date();
-                    const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
-
-                    // Exclude completed/failed heartbeat commands older than 30 minutes
-                    if ((cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out') && hoursOld > 0.5) {
-                      return false;
-                    }
-                    return true;
-                  });
-
-                  const latestHeartbeatCommand = recentHeartbeatCommands.length > 0
-                    ? [recentHeartbeatCommands.reduce((latest, cmd) =>
-                        new Date(cmd.created_at) > new Date(latest.created_at) ? cmd : latest
-                      )]
-                    : [];
-
-                  // For other commands: show active ones normally
-                  const activeOtherCommands = otherCommands.filter(cmd =>
-                    cmd.status === 'running' || cmd.status === 'sent' || cmd.status === 'pending'
-                  );
-                  const completedOtherCommands = otherCommands.filter(cmd =>
-                    cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out'
-                  ).slice(0, 1); // Only show last completed
-
-                  const displayCommands = [
-                    ...latestHeartbeatCommand.slice(0, 1), // Max 1 heartbeat (latest only)
-                    ...activeOtherCommands.slice(0, 2), // Max 2 active other commands
-                    ...completedOtherCommands.slice(0, 1) // Max 1 completed other command
-                  ].slice(0, 3); // Total max 3 entries
-
-                  if (displayCommands.length === 0) {
-                    return (
-                      <div className="text-center py-3 text-sm text-gray-500">
-                        No active operations
-                      </div>
-                    );
-                  }
-
-                  return displayCommands.map((command, index) => {
-                    const displayInfo = getCommandDisplayInfo(command);
-                    const statusInfo = getCommandStatus(command);
-                    const isActive = command.status === 'running' || command.status === 'sent' || command.status === 'pending';
-
-                    return (
-                      <div key={command.id} className="flex items-start space-x-2 p-2 bg-gray-50 rounded border border-gray-200">
-                        <div className="flex-shrink-0 mt-0.5">
-                          {displayInfo.icon}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-gray-900 truncate">
-                              {isActive ? (
-                                <span className="flex items-center space-x-1">
-                                  <span className={cn(
-                                    'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
-                                    statusInfo.color
-                                  )}>
-                                    {command.status === 'running' && <RefreshCw className="h-3 w-3 animate-spin mr-1" />}
-                                    {command.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
-                                    {isActive ? command.status.replace('_', ' ') : statusInfo.text}
-                                  </span>
-                                  <span className="ml-1">{displayInfo.label}</span>
-                                </span>
-                              ) : (
-                                <span className="flex items-center space-x-1">
-                                  <span className={cn(
-                                    'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
-                                    statusInfo.color
-                                  )}>
-                                    {command.status === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
-                                    {command.status === 'failed' && <XCircle className="h-3 w-3 mr-1" />}
-                                    {statusInfo.text}
-                                  </span>
-                                  <span className="ml-1">{displayInfo.label}</span>
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between mt-1">
-                            <span className="text-xs text-gray-500">
-                              {(() => {
-                                const createdTime = new Date(command.created_at);
-                                const now = new Date();
-                                const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
-
-                                // Show exact time for commands older than 1 hour, relative time for recent ones
-                                if (hoursOld > 1) {
-                                  return createdTime.toLocaleString();
-                                } else {
-                                  return formatRelativeTime(command.created_at);
-                                }
-                              })()}
-                            </span>
-                            {isActive && (command.status === 'pending' || command.status === 'sent') && (
-                              <button
-                                onClick={() => handleCancelCommand(command.id)}
-                                disabled={cancelCommandMutation.isPending}
-                                className="text-xs text-red-600 hover:text-red-800 disabled:opacity-50"
-                              >
-                                Cancel
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-
-              {/* Basic Status Info */}
-              <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-gray-200">
-                <span>Last seen: {formatRelativeTime(selectedAgent.last_seen)}</span>
-                <span>Last scan: {selectedAgent.last_scan ? formatRelativeTime(selectedAgent.last_scan) : 'Never'}</span>
-              </div>
-
-              {/* Heartbeat Status Info */}
-              {heartbeatStatus?.enabled && heartbeatStatus?.active && (
-                <div className="text-xs text-pink-600 bg-pink-50 px-2 py-1 rounded-md mt-2">
-                  Heartbeat active for {formatHeartExpiration(heartbeatStatus.until)}
-                </div>
-              )}
-
-              {/* Action Button */}
-              <div className="flex justify-center mt-3 pt-3 border-t border-gray-200">
-                <button
-                  onClick={() => handleScanAgent(selectedAgent.id)}
-                  disabled={scanAgentMutation.isPending}
-                  className="btn btn-primary w-full sm:w-auto text-sm"
-                >
-                  {scanAgentMutation.isPending ? (
-                    <RefreshCw className="animate-spin h-4 w-4 mr-2" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  Scan Now
-                </button>
-              </div>
-            </div>
-
-            {/* System info */}
-            <div className="card">
-              <h2 className="text-lg font-medium text-gray-900 mb-4">System Information</h2>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Basic System Info */}
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Platform</p>
-                    <p className="text-sm font-medium text-gray-900">
+                    {/* Heartbeat Status Indicator */}
+                    <div className="flex items-center space-x-2">
                       {(() => {
-                        const osInfo = parseOSInfo(selectedAgent);
-                        return osInfo.platform;
+                        // Use dedicated heartbeat status instead of general agent metadata
+                        const isRapidPolling = heartbeatStatus?.enabled && heartbeatStatus?.active;
+
+                        // Get source from heartbeat status (stored in agent metadata)
+                        const heartbeatSource = heartbeatStatus?.source;
+
+                        // Debug: Log the source field
+                        console.log('[Heartbeat Debug]', {
+                          isRapidPolling,
+                          source: heartbeatSource,
+                          sourceType: typeof heartbeatSource,
+                          heartbeatStatus
+                        });
+
+                        // Check if heartbeat is system-initiated (blue) or manual (pink)
+                        const isSystemHeartbeat = heartbeatSource === 'system';
+                        const isManualHeartbeat = heartbeatSource === 'manual';
+
+                        return (
+                          <button
+                            onClick={() => handleRapidPollingToggle(selectedAgent.id, !isRapidPolling)}
+                            disabled={heartbeatLoading}
+                            className={cn(
+                              'flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-colors',
+                              heartbeatLoading
+                                ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
+                                : isRapidPolling && isSystemHeartbeat
+                                ? 'bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200 cursor-pointer'
+                                : isRapidPolling && isManualHeartbeat
+                                ? 'bg-pink-100 text-pink-800 border border-pink-200 hover:bg-pink-200 cursor-pointer'
+                                : isRapidPolling
+                                ? 'bg-gray-100 text-gray-800 border border-gray-200 hover:bg-gray-200 cursor-pointer'
+                                : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 cursor-pointer'
+                            )}
+                            title={heartbeatLoading ? 'Sending command...' : `Click to toggle ${isRapidPolling ? 'normal' : 'heartbeat'} mode`}
+                          >
+                            {heartbeatLoading ? (
+                              <RefreshCw className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Activity className={cn(
+                                'h-3 w-3',
+                                isRapidPolling && isSystemHeartbeat ? 'text-blue-600 animate-pulse' :
+                                isRapidPolling && isManualHeartbeat ? 'text-pink-600 animate-pulse' :
+                                isRapidPolling ? 'text-gray-600 animate-pulse' : 'text-gray-400'
+                              )} />
+                            )}
+                            <span>
+                              {heartbeatLoading ? 'Sending...' : isRapidPolling ? 'Heartbeat (5s)' : 'Normal (5m)'}
+                            </span>
+                          </button>
+                        );
                       })()}
-                    </p>
+                    </div>
                   </div>
 
-                  <div>
-                    <p className="text-sm text-gray-600">Distribution</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {(() => {
-                        const osInfo = parseOSInfo(selectedAgent);
-                        return osInfo.distribution;
-                      })()}
-                    </p>
+                  {/* Compact Timeline Display */}
+                  <div className="space-y-2 mb-3">
                     {(() => {
-                      const osInfo = parseOSInfo(selectedAgent);
-                      if (osInfo.version) {
+                      const agentCommands = getAgentActiveCommands();
+
+                      // Separate heartbeat commands from other commands
+                      const heartbeatCommands = agentCommands.filter(cmd =>
+                        cmd.command_type === 'enable_heartbeat' || cmd.command_type === 'disable_heartbeat'
+                      );
+                      const otherCommands = agentCommands.filter(cmd =>
+                        cmd.command_type !== 'enable_heartbeat' && cmd.command_type !== 'disable_heartbeat'
+                      );
+
+                      // For heartbeat commands: only show the MOST RECENT one, but exclude old completed ones
+                      const recentHeartbeatCommands = heartbeatCommands.filter(cmd => {
+                        const createdTime = new Date(cmd.created_at);
+                        const now = new Date();
+                        const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
+
+                        // Exclude completed/failed heartbeat commands older than 30 minutes
+                        if ((cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out') && hoursOld > 0.5) {
+                          return false;
+                        }
+                        return true;
+                      });
+
+                      const latestHeartbeatCommand = recentHeartbeatCommands.length > 0
+                        ? [recentHeartbeatCommands.reduce((latest, cmd) =>
+                            new Date(cmd.created_at) > new Date(latest.created_at) ? cmd : latest
+                          )]
+                        : [];
+
+                      // For other commands: show active ones normally
+                      const activeOtherCommands = otherCommands.filter(cmd =>
+                        cmd.status === 'running' || cmd.status === 'sent' || cmd.status === 'pending'
+                      );
+                      const completedOtherCommands = otherCommands.filter(cmd =>
+                        cmd.status === 'completed' || cmd.status === 'failed' || cmd.status === 'timed_out'
+                      ).slice(0, 1); // Only show last completed
+
+                      const displayCommands = [
+                        ...latestHeartbeatCommand.slice(0, 1), // Max 1 heartbeat (latest only)
+                        ...activeOtherCommands.slice(0, 2), // Max 2 active other commands
+                        ...completedOtherCommands.slice(0, 1) // Max 1 completed other command
+                      ].slice(0, 3); // Total max 3 entries
+
+                      if (displayCommands.length === 0) {
                         return (
-                          <p className="text-xs text-gray-500 mt-1">
-                            Version: {osInfo.version}
-                          </p>
+                          <div className="text-center py-3 text-sm text-gray-500">
+                            No active operations
+                          </div>
                         );
                       }
-                      return null;
+
+                      return displayCommands.map((command, index) => {
+                        const displayInfo = getCommandDisplayInfo(command);
+                        const statusInfo = getCommandStatus(command);
+                        const isActive = command.status === 'running' || command.status === 'sent' || command.status === 'pending';
+
+                        return (
+                          <div key={command.id} className="flex items-start space-x-2 p-2 bg-gray-50 rounded border border-gray-200">
+                            <div className="flex-shrink-0 mt-0.5">
+                              {displayInfo.icon}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-gray-900 truncate">
+                                  {isActive ? (
+                                    <span className="flex items-center space-x-1">
+                                      <span className={cn(
+                                        'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
+                                        statusInfo.color
+                                      )}>
+                                        {command.status === 'running' && <RefreshCw className="h-3 w-3 animate-spin mr-1" />}
+                                        {command.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                                        {isActive ? command.status.replace('_', ' ') : statusInfo.text}
+                                      </span>
+                                      <span className="ml-1">{displayInfo.label}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center space-x-1">
+                                      <span className={cn(
+                                        'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border',
+                                        statusInfo.color
+                                      )}>
+                                        {command.status === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
+                                        {command.status === 'failed' && <XCircle className="h-3 w-3 mr-1" />}
+                                        {statusInfo.text}
+                                      </span>
+                                      <span className="ml-1">{displayInfo.label}</span>
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between mt-1">
+                                <span className="text-xs text-gray-500">
+                                  {(() => {
+                                    const createdTime = new Date(command.created_at);
+                                    const now = new Date();
+                                    const hoursOld = (now.getTime() - createdTime.getTime()) / (1000 * 60 * 60);
+
+                                    // Show exact time for commands older than 1 hour, relative time for recent ones
+                                    if (hoursOld > 1) {
+                                      return createdTime.toLocaleString();
+                                    } else {
+                                      return formatRelativeTime(command.created_at);
+                                    }
+                                  })()}
+                                </span>
+                                {isActive && (command.status === 'pending' || command.status === 'sent') && (
+                                  <button
+                                    onClick={() => handleCancelCommand(command.id)}
+                                    disabled={cancelCommandMutation.isPending}
+                                    className="text-xs text-red-600 hover:text-red-800 disabled:opacity-50"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
                     })()}
                   </div>
 
-                  <div>
-                    <p className="text-sm text-gray-600">Architecture</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {selectedAgent.os_architecture || selectedAgent.architecture}
-                    </p>
+                  {/* Basic Status Info */}
+                  <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-gray-200">
+                    <span>Last seen: {formatRelativeTime(selectedAgent.last_seen)}</span>
+                    <span>Last scan: {selectedAgent.last_scan ? formatRelativeTime(selectedAgent.last_scan) : 'Never'}</span>
+                  </div>
+
+                  {/* Heartbeat Status Info */}
+                  {heartbeatStatus?.enabled && heartbeatStatus?.active && (
+                    (() => {
+                      // Get source from heartbeat status (stored in agent metadata)
+                      const heartbeatSource = heartbeatStatus?.source;
+                      const isSystemHeartbeat = heartbeatSource === 'system';
+
+                      return (
+                        <div className={cn(
+                          "text-xs px-2 py-1 rounded-md mt-2",
+                          isSystemHeartbeat
+                            ? "text-blue-600 bg-blue-50"
+                            : "text-pink-600 bg-pink-50"
+                        )}>
+                          {isSystemHeartbeat ? 'System ' : 'Manual '}heartbeat active for {formatHeartExpiration(heartbeatStatus.until)}
+                        </div>
+                      );
+                    })()
+                  )}
+
+                  {/* Action Button */}
+                  <div className="flex justify-center mt-3 pt-3 border-t border-gray-200">
+                    <button
+                      onClick={() => handleScanAgent(selectedAgent.id)}
+                      disabled={scanAgentMutation.isPending}
+                      className="btn btn-primary w-full sm:w-auto text-sm"
+                    >
+                      {scanAgentMutation.isPending ? (
+                        <RefreshCw className="animate-spin h-4 w-4 mr-2" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                      )}
+                      Scan Now
+                    </button>
                   </div>
                 </div>
 
-                {/* Hardware Specs */}
-                <div className="space-y-4">
-                  {(() => {
-                    const meta = getSystemMetadata(selectedAgent);
-                    return (
-                      <>
-                        <div>
-                          <p className="text-sm text-gray-600 flex items-center">
-                            <Cpu className="h-4 w-4 mr-1" />
-                            CPU
-                          </p>
-                          <p className="text-sm font-medium text-gray-900">
-                            {meta.cpuModel}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {meta.cpuCores} cores
-                          </p>
-                        </div>
+                {/* System info */}
+                <div className="card">
+                  <h2 className="text-lg font-medium text-gray-900 mb-4">System Information</h2>
 
-                        {meta.memoryTotal > 0 && (
-                          <div>
-                            <p className="text-sm text-gray-600 flex items-center">
-                              <MemoryStick className="h-4 w-4 mr-1" />
-                              Memory
-                            </p>
-                            <p className="text-sm font-medium text-gray-900">
-                              {formatBytes(meta.memoryTotal)}
-                            </p>
-                          </div>
-                        )}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Basic System Info */}
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-600">Platform</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {(() => {
+                            const osInfo = parseOSInfo(selectedAgent);
+                            return osInfo.platform;
+                          })()}
+                        </p>
+                      </div>
 
-                        {meta.diskTotal > 0 && (
-                          <div>
-                            <p className="text-sm text-gray-600 flex items-center">
-                              <HardDrive className="h-4 w-4 mr-1" />
-                              Disk ({meta.diskMount})
-                            </p>
-                            <p className="text-sm font-medium text-gray-900">
-                              {formatBytes(meta.diskUsed)} / {formatBytes(meta.diskTotal)}
-                            </p>
-                            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                              <div
-                                className="bg-blue-600 h-2 rounded-full"
-                                style={{ width: `${Math.round((meta.diskUsed / meta.diskTotal) * 100)}%` }}
-                              ></div>
+                      <div>
+                        <p className="text-sm text-gray-600">Distribution</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {(() => {
+                            const osInfo = parseOSInfo(selectedAgent);
+                            return osInfo.distribution;
+                          })()}
+                        </p>
+                        {(() => {
+                          const osInfo = parseOSInfo(selectedAgent);
+                          if (osInfo.version) {
+                            return (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Version: {osInfo.version}
+                              </p>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+
+                      <div>
+                        <p className="text-sm text-gray-600">Architecture</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {selectedAgent.os_architecture || selectedAgent.architecture}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Hardware Specs */}
+                    <div className="space-y-4">
+                      {(() => {
+                        const meta = getSystemMetadata(selectedAgent);
+                        return (
+                          <>
+                            <div>
+                              <p className="text-sm text-gray-600 flex items-center">
+                                <Cpu className="h-4 w-4 mr-1" />
+                                CPU
+                              </p>
+                              <p className="text-sm font-medium text-gray-900">
+                                {meta.cpuModel}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {meta.cpuCores} cores
+                              </p>
                             </div>
-                            <p className="text-xs text-gray-500">
-                              {Math.round((meta.diskUsed / meta.diskTotal) * 100)}% used
-                            </p>
-                          </div>
-                        )}
 
-                        {meta.processes !== 'Unknown' && (
-                          <div>
-                            <p className="text-sm text-gray-600 flex items-center">
-                              <GitBranch className="h-4 w-4 mr-1" />
-                              Running Processes
-                            </p>
-                            <p className="text-sm font-medium text-gray-900">
-                              {meta.processes}
-                            </p>
-                          </div>
-                        )}
+                            {meta.memoryTotal > 0 && (
+                              <div>
+                                <p className="text-sm text-gray-600 flex items-center">
+                                  <MemoryStick className="h-4 w-4 mr-1" />
+                                  Memory
+                                </p>
+                                <p className="text-sm font-medium text-gray-900">
+                                  {formatBytes(meta.memoryTotal)}
+                                </p>
+                              </div>
+                            )}
 
-                        {meta.uptime !== 'Unknown' && (
-                          <div>
-                            <p className="text-sm text-gray-600 flex items-center">
-                              <Clock className="h-4 w-4 mr-1" />
-                              Uptime
-                            </p>
-                            <p className="text-sm font-medium text-gray-900">
-                              {meta.uptime}
-                            </p>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
+                            {meta.diskTotal > 0 && (
+                              <div>
+                                <p className="text-sm text-gray-600 flex items-center">
+                                  <HardDrive className="h-4 w-4 mr-1" />
+                                  Disk ({meta.diskMount})
+                                </p>
+                                <p className="text-sm font-medium text-gray-900">
+                                  {formatBytes(meta.diskUsed)} / {formatBytes(meta.diskTotal)}
+                                </p>
+                                <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                  <div
+                                    className="bg-blue-600 h-2 rounded-full"
+                                    style={{ width: `${Math.round((meta.diskUsed / meta.diskTotal) * 100)}%` }}
+                                  ></div>
+                                </div>
+                                <p className="text-xs text-gray-500">
+                                  {Math.round((meta.diskUsed / meta.diskTotal) * 100)}% used
+                                </p>
+                              </div>
+                            )}
+
+                            {meta.processes !== 'Unknown' && (
+                              <div>
+                                <p className="text-sm text-gray-600 flex items-center">
+                                  <GitBranch className="h-4 w-4 mr-1" />
+                                  Running Processes
+                                </p>
+                                <p className="text-sm font-medium text-gray-900">
+                                  {meta.processes}
+                                </p>
+                              </div>
+                            )}
+
+                            {meta.uptime !== 'Unknown' && (
+                              <div>
+                                <p className="text-sm text-gray-600 flex items-center">
+                                  <Clock className="h-4 w-4 mr-1" />
+                                  Uptime
+                                </p>
+                                <p className="text-sm font-medium text-gray-900">
+                                  {meta.uptime}
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
                 </div>
               </div>
+            )}
 
-              </div>
+            {activeTab === 'storage' && (
+              <AgentStorage agentId={selectedAgent.id} />
+            )}
 
-              {/* System Updates */}
-              <AgentSystemUpdates agentId={selectedAgent.id} />
+            {activeTab === 'updates' && (
+              <AgentUpdatesEnhanced agentId={selectedAgent.id} />
+            )}
 
-              </div>
-            ) : (
-              <div>
-                <ChatTimeline agentId={selectedAgent.id} isScopedView={true} />
-              </div>
+            {activeTab === 'scanners' && (
+              <AgentScanners agentId={selectedAgent.id} />
+            )}
+
+            {activeTab === 'history' && (
+              <ChatTimeline agentId={selectedAgent.id} isScopedView={true} />
             )}
           </div>
 

@@ -84,7 +84,7 @@ func Load() (*Config, error) {
 	cfg.CheckInInterval = checkInInterval
 	cfg.OfflineThreshold = offlineThreshold
 	cfg.Timezone = getEnv("TIMEZONE", "UTC")
-	cfg.LatestAgentVersion = getEnv("LATEST_AGENT_VERSION", "0.1.16")
+	cfg.LatestAgentVersion = getEnv("LATEST_AGENT_VERSION", "0.1.18")
 
 	// Handle missing secrets
 	if cfg.Admin.Password == "" || cfg.Admin.JWTSecret == "" || cfg.Database.Password == "" {

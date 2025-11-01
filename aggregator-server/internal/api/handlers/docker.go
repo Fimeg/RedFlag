@@ -427,6 +427,7 @@ func (h *DockerHandler) InstallUpdate(c *gin.Context) {
 			"container_id": containerID,
 		},
 		Status: models.CommandStatusPending,
+		Source: models.CommandSourceManual, // User-initiated Docker update
 	}
 
 	if err := h.commandQueries.CreateCommand(command); err != nil {

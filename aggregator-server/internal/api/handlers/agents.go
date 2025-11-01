@@ -412,6 +412,7 @@ func (h *AgentHandler) GetCommands(c *gin.Context) {
 								CommandType: models.CommandTypeDisableHeartbeat,
 								Params:      models.JSONB{},
 								Status:      models.CommandStatusCompleted,
+								Source:      models.CommandSourceSystem,
 								Result: models.JSONB{
 									"message": "Heartbeat cleared - agent restarted without active heartbeat mode",
 								},
@@ -492,6 +493,13 @@ func (h *AgentHandler) TriggerScan(c *gin.Context) {
 		return
 	}
 
+	// Trigger system heartbeat before scan (5 minutes should be enough for most scans)
+	if created, err := h.triggerSystemHeartbeat(agentID, 5); err != nil {
+		log.Printf("Warning: Failed to trigger system heartbeat for scan: %v", err)
+	} else if created {
+		log.Printf("[Scan] Heartbeat initiated for 'Scan Updates' operation on agent %s", agentID)
+	}
+
 	// Create scan command
 	cmd := &models.AgentCommand{
 		ID:          uuid.New(),
@@ -499,6 +507,7 @@ func (h *AgentHandler) TriggerScan(c *gin.Context) {
 		CommandType: models.CommandTypeScanUpdates,
 		Params:      models.JSONB{},
 		Status:      models.CommandStatusPending,
+		Source:      models.CommandSourceManual,
 	}
 
 	if err := h.commandQueries.CreateCommand(cmd); err != nil {
@@ -534,7 +543,7 @@ func (h *AgentHandler) TriggerHeartbeat(c *gin.Context) {
 		commandType = models.CommandTypeEnableHeartbeat
 	}
 
-	// Create heartbeat command with duration parameter
+	// Create heartbeat command with duration parameter (manual = user-initiated)
 	cmd := &models.AgentCommand{
 		ID:          uuid.New(),
 		AgentID:     agentID,
@@ -543,6 +552,7 @@ func (h *AgentHandler) TriggerHeartbeat(c *gin.Context) {
 			"duration_minutes": request.DurationMinutes,
 		},
 		Status: models.CommandStatusPending,
+		Source: models.CommandSourceManual,
 	}
 
 	if err := h.commandQueries.CreateCommand(cmd); err != nil {
@@ -550,23 +560,26 @@ func (h *AgentHandler) TriggerHeartbeat(c *gin.Context) {
 		return
 	}
 
-	// TODO: Clean up previous heartbeat commands for this agent (only for enable commands)
-	// if request.Enabled {
-	// 	// Mark previous heartbeat commands as 'replaced' to clean up Live Operations view
-	// 	if err := h.commandQueries.MarkPreviousHeartbeatCommandsReplaced(agentID, cmd.ID); err != nil {
-	// 		log.Printf("Warning: Failed to mark previous heartbeat commands as replaced: %v", err)
-	// 		// Don't fail the request, just log the warning
-	// 	} else {
-	// 		log.Printf("[Heartbeat] Cleaned up previous heartbeat commands for agent %s", agentID)
-	// 	}
-	// }
+	// Store heartbeat source in agent metadata immediately
+	if request.Enabled {
+		agent, err := h.agentQueries.GetAgentByID(agentID)
+		if err == nil {
+			if agent.Metadata == nil {
+				agent.Metadata = models.JSONB{}
+			}
+			agent.Metadata["heartbeat_source"] = models.CommandSourceManual
+			if err := h.agentQueries.UpdateAgent(agent); err != nil {
+				log.Printf("Warning: Failed to update agent metadata with heartbeat source: %v", err)
+			}
+		}
+	}
 
 	action := "disabled"
 	if request.Enabled {
 		action = "enabled"
 	}
 
-	log.Printf("💓 Heartbeat %s command created for agent %s (duration: %d minutes)",
+	log.Printf("[Heartbeat] Manual heartbeat %s command created for agent %s (duration: %d minutes)",
 		action, agentID, request.DurationMinutes)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -574,6 +587,60 @@ func (h *AgentHandler) TriggerHeartbeat(c *gin.Context) {
 		"command_id": cmd.ID,
 		"enabled": request.Enabled,
 	})
+}
+
+// triggerSystemHeartbeat creates a system-initiated heartbeat command
+// Returns true if heartbeat was created, false if skipped (already active)
+func (h *AgentHandler) triggerSystemHeartbeat(agentID uuid.UUID, durationMinutes int) (bool, error) {
+	// Check if heartbeat should be enabled (not already active)
+	agent, err := h.agentQueries.GetAgentByID(agentID)
+	if err != nil {
+		log.Printf("Warning: Failed to get agent %s for heartbeat check: %v", agentID, err)
+		// Enable heartbeat by default if we can't check
+	} else {
+		// Check if rapid polling is already enabled and not expired
+		if enabled, ok := agent.Metadata["rapid_polling_enabled"].(bool); ok && enabled {
+			if untilStr, ok := agent.Metadata["rapid_polling_until"].(string); ok {
+				until, err := time.Parse(time.RFC3339, untilStr)
+				if err == nil && until.After(time.Now().Add(time.Duration(durationMinutes)*time.Minute)) {
+					// Heartbeat is already active for sufficient time
+					log.Printf("[Heartbeat] Agent %s already has active heartbeat until %s (skipping system heartbeat)", agentID, untilStr)
+					return false, nil
+				}
+			}
+		}
+	}
+
+	// Create system heartbeat command
+	cmd := &models.AgentCommand{
+		ID:          uuid.New(),
+		AgentID:     agentID,
+		CommandType: models.CommandTypeEnableHeartbeat,
+		Params: models.JSONB{
+			"duration_minutes": durationMinutes,
+		},
+		Status: models.CommandStatusPending,
+		Source: models.CommandSourceSystem,
+	}
+
+	if err := h.commandQueries.CreateCommand(cmd); err != nil {
+		return false, fmt.Errorf("failed to create system heartbeat command: %w", err)
+	}
+
+	// Store heartbeat source in agent metadata immediately
+	agent, err = h.agentQueries.GetAgentByID(agentID)
+	if err == nil {
+		if agent.Metadata == nil {
+			agent.Metadata = models.JSONB{}
+		}
+		agent.Metadata["heartbeat_source"] = models.CommandSourceSystem
+		if err := h.agentQueries.UpdateAgent(agent); err != nil {
+			log.Printf("Warning: Failed to update agent metadata with heartbeat source: %v", err)
+		}
+	}
+
+	log.Printf("[Heartbeat] System heartbeat initiated for agent %s - Scan operation (duration: %d minutes)", agentID, durationMinutes)
+	return true, nil
 }
 
 // GetHeartbeatStatus returns the current heartbeat status for an agent
@@ -598,6 +665,7 @@ func (h *AgentHandler) GetHeartbeatStatus(c *gin.Context) {
 		"until": nil,
 		"active": false,
 		"duration_minutes": 0,
+		"source": nil,
 	}
 
 	if agent.Metadata != nil {
@@ -619,6 +687,11 @@ func (h *AgentHandler) GetHeartbeatStatus(c *gin.Context) {
 				// Get duration if available
 				if duration, exists := agent.Metadata["rapid_polling_duration_minutes"]; exists {
 					response["duration_minutes"] = duration.(float64)
+				}
+
+				// Get source if available
+				if source, exists := agent.Metadata["heartbeat_source"]; exists {
+					response["source"] = source.(string)
 				}
 			}
 		}
@@ -674,6 +747,7 @@ func (h *AgentHandler) TriggerUpdate(c *gin.Context) {
 		CommandType: models.CommandTypeInstallUpdate,
 		Params:      params,
 		Status:      models.CommandStatusPending,
+		Source:      models.CommandSourceManual,
 	}
 
 	if err := h.commandQueries.CreateCommand(cmd); err != nil {
@@ -1008,6 +1082,7 @@ func (h *AgentHandler) TriggerReboot(c *gin.Context) {
 			"message":       req.Message,
 		},
 		Status:    models.CommandStatusPending,
+		Source:    models.CommandSourceManual,
 		CreatedAt: time.Now(),
 	}
 

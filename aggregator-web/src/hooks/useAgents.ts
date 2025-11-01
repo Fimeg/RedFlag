@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentApi } from '@/lib/api';
 import type { Agent, ListQueryParams, AgentListResponse, ScanRequest } from '@/types';
 import type { UseQueryResult, UseMutationResult } from '@tanstack/react-query';
@@ -27,19 +27,43 @@ export const useAgent = (id: string, enabled: boolean = true): UseQueryResult<Ag
 };
 
 export const useScanAgent = (): UseMutationResult<void, Error, string, unknown> => {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: agentApi.scanAgent,
+    onSuccess: () => {
+      // Invalidate all agents queries to trigger refetch
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // Also invalidate specific agent queries
+      queryClient.invalidateQueries({ queryKey: ['agent'] });
+    },
   });
 };
 
 export const useScanMultipleAgents = (): UseMutationResult<void, Error, ScanRequest, unknown> => {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: agentApi.triggerScan,
+    onSuccess: () => {
+      // Invalidate all agents queries to trigger refetch
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // Also invalidate specific agent queries
+      queryClient.invalidateQueries({ queryKey: ['agent'] });
+    },
   });
 };
 
 export const useUnregisterAgent = (): UseMutationResult<void, Error, string, unknown> => {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: agentApi.unregisterAgent,
+    onSuccess: () => {
+      // Invalidate all agents queries to trigger immediate refetch
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // Also invalidate specific agent queries
+      queryClient.invalidateQueries({ queryKey: ['agent'] });
+    },
   });
 };

@@ -13,6 +13,7 @@ type AgentCommand struct {
 	CommandType    string     `json:"command_type" db:"command_type"`
 	Params         JSONB      `json:"params" db:"params"`
 	Status         string     `json:"status" db:"status"`
+	Source         string     `json:"source" db:"source"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	SentAt         *time.Time `json:"sent_at,omitempty" db:"sent_at"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty" db:"completed_at"`
@@ -64,6 +65,12 @@ const (
 	CommandStatusRunning   = "running"
 )
 
+// Command sources
+const (
+	CommandSourceManual = "manual" // User-initiated via UI
+	CommandSourceSystem = "system" // Auto-triggered by system operations
+)
+
 // ActiveCommandInfo represents information about an active command for UI display
 type ActiveCommandInfo struct {
 	ID            uuid.UUID  `json:"id" db:"id"`
@@ -71,6 +78,7 @@ type ActiveCommandInfo struct {
 	CommandType   string     `json:"command_type" db:"command_type"`
 	Params        JSONB      `json:"params" db:"params"`
 	Status        string     `json:"status" db:"status"`
+	Source        string     `json:"source" db:"source"`
 	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
 	SentAt        *time.Time `json:"sent_at,omitempty" db:"sent_at"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty" db:"completed_at"`

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	AgentVersion = "0.1.17" // Fixed Linux disk detection to show all physical mount points (/, /home, etc.)
+	AgentVersion = "0.1.18" // Enhanced disk detection with comprehensive partition reporting
 )
 
 // getConfigPath returns the platform-specific config path

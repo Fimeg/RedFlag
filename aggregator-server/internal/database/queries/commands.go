@@ -21,9 +21,9 @@ func NewCommandQueries(db *sqlx.DB) *CommandQueries {
 func (q *CommandQueries) CreateCommand(cmd *models.AgentCommand) error {
 	query := `
 		INSERT INTO agent_commands (
-			id, agent_id, command_type, params, status, retried_from_id
+			id, agent_id, command_type, params, status, source, retried_from_id
 		) VALUES (
-			:id, :agent_id, :command_type, :params, :status, :retried_from_id
+			:id, :agent_id, :command_type, :params, :status, :source, :retried_from_id
 		)
 	`
 	_, err := q.db.NamedExec(query, cmd)
@@ -183,6 +183,7 @@ func (q *CommandQueries) GetActiveCommands() ([]models.ActiveCommandInfo, error)
 			c.command_type,
 			c.params,
 			c.status,
+			c.source,
 			c.created_at,
 			c.sent_at,
 			c.result,
@@ -244,6 +245,7 @@ func (q *CommandQueries) GetRecentCommands(limit int) ([]models.ActiveCommandInf
 			c.agent_id,
 			c.command_type,
 			c.status,
+			c.source,
 			c.created_at,
 			c.sent_at,
 			c.completed_at,

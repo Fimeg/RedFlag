@@ -176,9 +176,10 @@ export interface AptUpdateInfo {
 export interface Command {
   id: string;
   agent_id: string;
-  command_type: 'scan' | 'install' | 'update' | 'reboot';
+  command_type: 'scan' | 'install' | 'update' | 'reboot' | 'enable_heartbeat' | 'disable_heartbeat';
   payload: Record<string, any>;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'sent' | 'timed_out' | 'cancelled';
+  source: 'manual' | 'system'; // manual = user-initiated, system = auto-triggered
   created_at: string;
   updated_at: string;
   executed_at: string | null;

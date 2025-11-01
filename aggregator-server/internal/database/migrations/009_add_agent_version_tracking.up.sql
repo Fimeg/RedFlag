@@ -2,7 +2,7 @@
 -- This enables the hybrid version tracking system
 
 ALTER TABLE agents
-ADD COLUMN current_version VARCHAR(50) DEFAULT '0.1.3',
+ADD COLUMN current_version VARCHAR(50) DEFAULT '0.0.0',
 ADD COLUMN update_available BOOLEAN DEFAULT FALSE,
 ADD COLUMN last_version_check TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
