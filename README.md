@@ -2,7 +2,7 @@
 
 > **⚠️ ALPHA SOFTWARE - NOT READY FOR PRODUCTION**
 >
-> This is experimental software in active development. Features may be broken, bugs are expected, and breaking changes happen frequently. Use at your own risk, preferably on test systems only. Seriously, don't put this in production yet.
+> This is experimental software in active development. Features may be broken, bugs are expected, and breaking changes happen frequently. Use at your own risk, preferably on test systems only. Seriously, don't put this in production yet. **Update 11/7/2025:** A large update will be released next week which has some fairly significant changes. Recommendation is to hold off unless ALPHA Testing, knowing that a reinstall of all agents and server is most likely.
 
 **Self-hosted update management for homelabs**
 
