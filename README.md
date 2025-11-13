@@ -2,7 +2,9 @@
 
 > **⚠️ ALPHA SOFTWARE - NOT READY FOR PRODUCTION**
 >
-> This is experimental software in active development. Features may be broken, bugs are expected, and breaking changes happen frequently. Use at your own risk, preferably on test systems only. Seriously, don't put this in production yet. **Update 11/7/2025:** A large update will be released next week which has some fairly significant changes. Recommendation is to hold off unless ALPHA Testing, knowing that a reinstall of all agents and server is most likely.
+> This is experimental software in active development. Features may be broken, bugs are expected, and breaking changes happen frequently. Use at your own risk, preferably on test systems only. Seriously, don't put this in production yet.  A large update will be released soon which has some fairly significant changes. Recommendation is to hold off unless ALPHA Testing, knowing that a reinstall of all agents and server is most likely.
+
+**Update 11/13/2025:** With much consternation - my deveopment machine's primary /home (ssd) has failed and I am rebuilding my dev eviornment. Quite luckily, I saved a backup of my builds offsite but I realize I had failed to save my nearly 50 md files for technical debt, features etc. I'm now experiencing joy to restore some of those. - worst it'll slow project a little, best means we get to have a second look through every file now. I'll release the build soon - but I need to make sure its both the latest, and as feature complete in function as the current. More pictures and updates on our discord. https://discord.gg/mtaU98fVqr Cheers!
 
 **Self-hosted update management for homelabs**
 
