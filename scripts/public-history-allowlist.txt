@@ -1,0 +1,14 @@
+# Reviewed commits already present in the public history.
+# Each contains a historical internal host/path reference or author identity.
+#
+# Empty, and it should stay that way.
+#
+# It held forty-four entries until 2026-09-04. Every one of them excused a
+# commit that the projection epoch removed from public history, so keeping them
+# would be an allowlist for commits that no longer exist. The gate was right to
+# refuse a stale entry rather than quietly skip it: an allowlist nobody can
+# check is not a review, it is a habit.
+#
+# An entry here now would mean something new crossed that should not have. The
+# candidate gate in .publication/ is where that decision belongs first; this
+# file is only for what got past it and was then accepted on purpose.

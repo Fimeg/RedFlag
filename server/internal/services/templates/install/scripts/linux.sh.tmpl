@@ -1,0 +1,1076 @@
+#!/bin/bash
+# RedFlag Agent Installer - Linux
+# Generated for agent: {{.AgentID}}
+# Platform: {{.Platform}}
+# Architecture: {{.Architecture}}
+# Version: {{.Version}}
+
+set -e
+
+# Check if running as root (required for user creation and sudoers)
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: This script must be run as root for secure installation (use sudo)"
+    exit 1
+fi
+
+# Variables
+AGENT_ID="{{.AgentID}}"
+AGENT_USER="redflag-agent"
+LOCAL_API_GROUP="redflag-local"
+AGENT_HOME="{{.AgentHome}}"
+BASE_DIR="/var/lib/redflag"
+CONFIG_DIR="/etc/redflag"
+AGENT_CONFIG_DIR="/etc/redflag/agent"
+SERVER_KEY_DIR="{{.ServerKeyDir}}"
+OLD_CONFIG_DIR="/etc/aggregator"
+LOG_DIR="/var/log/redflag"
+AGENT_LOG_DIR="/var/log/redflag/agent"
+INSTALL_DIR="/usr/local/bin"
+SERVICE_NAME="redflag-agent"
+SUDOERS_FILE="/etc/sudoers.d/redflag-agent"
+BINARY_URL="{{.BinaryURL}}"
+CONFIG_URL="{{.ConfigURL}}"
+VERSION="{{.Version}}"
+BACKUP_DIR="${CONFIG_DIR}/backups/backup.$(date +%s)"
+
+# Detect architecture
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64)  ARCH_TAG="amd64" ;;
+    aarch64) ARCH_TAG="arm64" ;;
+    armv7l)  ARCH_TAG="armv7" ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        echo "Supported: x86_64 (amd64), aarch64 (arm64), armv7l (armv7)"
+        exit 1
+        ;;
+esac
+
+PLATFORM_TAG="linux"
+
+# Override download URL with detected architecture
+BINARY_URL="{{.ServerURL}}/api/v1/downloads/linux-${ARCH_TAG}?version={{.Version}}"
+
+# Function to detect package manager
+detect_package_manager() {
+    if command -v apt-get &> /dev/null; then
+        echo "apt"
+    elif command -v dnf &> /dev/null; then
+        echo "dnf"
+    elif command -v yum &> /dev/null; then
+        echo "yum"
+    elif command -v pacman &> /dev/null; then
+        echo "pacman"
+    elif command -v zypper &> /dev/null; then
+        echo "zypper"
+    else
+        echo "unknown"
+    fi
+}
+
+echo "=== RedFlag Agent v${VERSION} Installation ==="
+echo "Agent ID: ${AGENT_ID}"
+echo "Platform: {{.Platform}}"
+echo "Installing to: ${INSTALL_DIR}/${SERVICE_NAME}"
+echo
+
+# ---- argument parsing ----
+GUIDED=false
+CHECKOFF_ONLY=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --guided) GUIDED=true; shift ;;
+        --checkoff) CHECKOFF_ONLY=true; shift ;;
+        *) echo "Unknown option: $1"; echo "Usage: $0 [--guided] [--checkoff]"; exit 1 ;;
+    esac
+done
+
+# ---- checkoff tracking ----
+# Each step records a line: COMPONENT|RESULT|DETAIL
+# RESULT: ok, skip, fail
+CHECKOFF_LOG=$(mktemp)
+checkoff() {
+    local component="$1" result="$2" detail="$3"
+    echo "${component}|${result}|${detail}" >> "$CHECKOFF_LOG"
+    case "$result" in
+        ok)   echo "  [✓] ${component}: ${detail}" ;;
+        skip) echo "  [—] ${component}: ${detail} (skipped)" ;;
+        fail) echo "  [✗] ${component}: ${detail}" ;;
+    esac
+}
+
+emit_checkoff_report() {
+    echo ""
+    echo "=== Component Checkoff Report ==="
+    echo "Release: ${VERSION}"
+    echo "Host: $(hostname)"
+    echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo ""
+    local fail_count=0
+    while IFS='|' read -r comp result detail; do
+        case "$result" in
+            ok)   echo "  [✓] ${comp}: ${detail}" ;;
+            skip) echo "  [—] ${comp}: ${detail}" ;;
+            fail) echo "  [✗] ${comp}: ${detail}"; fail_count=$((fail_count + 1)) ;;
+        esac
+    done < "$CHECKOFF_LOG"
+    echo ""
+    if [ "$fail_count" -gt 0 ]; then
+        echo "Result: $fail_count component(s) failed"
+    else
+        echo "Result: all components verified"
+    fi
+
+    # Write structured checkoff to agent's local journal.
+    local JOURNAL_DIR="${AGENT_HOME}/checkoffs"
+    sudo mkdir -p "$JOURNAL_DIR"
+    sudo chown "$AGENT_USER:$AGENT_USER" "$JOURNAL_DIR"
+    local REPORT_FILE="${JOURNAL_DIR}/checkoff-${VERSION}-$(date -u +%Y%m%dT%H%M%SZ).json"
+    {
+        echo "{"
+        echo "  \"release\": \"${VERSION}\","
+        echo "  \"host\": \"$(hostname)\","
+        echo "  \"time\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+        echo "  \"agent_id\": \"${AGENT_ID}\","
+        echo "  \"components\": ["
+        local first=true
+        while IFS='|' read -r comp result detail; do
+            [ -z "$comp" ] && continue
+            if $first; then first=false; else echo ","; fi
+            echo -n "    {\"name\":\"${comp}\",\"result\":\"${result}\",\"detail\":\"${detail}\"}"
+        done < "$CHECKOFF_LOG"
+        echo ""
+        echo "  ]"
+        echo "}"
+    } | sudo tee "$REPORT_FILE" > /dev/null
+    sudo chown "$AGENT_USER:$AGENT_USER" "$REPORT_FILE"
+    echo "Checkoff journal: $REPORT_FILE"
+
+    # Post checkoff as security event to server (fire-and-forget).
+    local EVENT_JSON
+    EVENT_JSON=$(printf '{"events":[{"timestamp":"%s","level":"info","event_type":"install_checkoff","message":"Install checkoff for %s on %s","details":{"release":"%s","host":"%s","agent_id":"%s","components":%s}}]}' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VERSION" "$(hostname)" "$VERSION" "$(hostname)" "$AGENT_ID" \
+        "$(python3 -c "import json; print(json.dumps([{'name':c,'result':r,'detail':d} for c,r,d in (l.split('|') for l in open('$CHECKOFF_LOG').read().strip().split(chr(10)) if l)]))" 2>/dev/null || echo '[]')")
+    curl -sf -X POST "{{.ServerURL}}/api/v1/agents/${AGENT_ID}/security-events" \
+        -H "Content-Type: application/json" \
+        -H "X-Agent-ID: ${AGENT_ID}" \
+        -d "$EVENT_JSON" 2>/dev/null || true
+    echo "Checkoff event posted to server"
+}
+
+# Guided-mode welcome.
+if $GUIDED; then
+    echo "┌──────────────────────────────────────────┐"
+    echo "│       RedFlag v${VERSION} — Guided Install      │"
+    echo "└──────────────────────────────────────────┘"
+    echo ""
+    echo "This will install the RedFlag agent and its components."
+    echo "Required components: agent, helper, web (embedded in server)."
+    echo "Optional components: RedFlag Desktop (native local-machine operations console)."
+    echo ""
+    echo "Press Enter to continue or Ctrl-C to abort."
+    read -r
+fi
+
+# Checkoff-only mode: re-run healthcheck against the manifest, skip downloads.
+if $CHECKOFF_ONLY; then
+    echo "=== Checkoff-only mode — verifying installed components ==="
+    # Fall through to manifest fetch, skip downloads, run version checks.
+fi
+
+# Step 1: Detect existing installation
+echo "Detecting existing RedFlag installations..."
+MIGRATION_NEEDED=false
+
+if [ -f "${CONFIG_DIR}/config.json" ]; then
+    echo "✓ Existing installation detected at ${CONFIG_DIR}"
+    MIGRATION_NEEDED=true
+elif [ -f "${OLD_CONFIG_DIR}/config.json" ]; then
+    echo "⚠ Old installation detected at ${OLD_CONFIG_DIR} - MIGRATION REQUIRED"
+    MIGRATION_NEEDED=true
+else
+    echo "✓ Fresh installation"
+fi
+
+# Step 2: Create backup if migration needed
+if [ "${MIGRATION_NEEDED}" = true ]; then
+    echo
+    echo "=== Migration Required ==="
+    echo "Agent will migrate on first start. Backing up configuration..."
+    sudo mkdir -p "${BACKUP_DIR}"
+
+    if [ -f "${OLD_CONFIG_DIR}/config.json" ]; then
+        echo "Backing up old configuration..."
+        sudo cp -r "${OLD_CONFIG_DIR}"/* "${BACKUP_DIR}/" 2>/dev/null || true
+    fi
+
+    if [ -f "${CONFIG_DIR}/config.json" ]; then
+        echo "Backing up current configuration..."
+        sudo cp "${CONFIG_DIR}/config.json" "${BACKUP_DIR}/config.json.backup" 2>/dev/null || true
+    fi
+
+    echo "Migration will run automatically when agent starts."
+    echo "View migration logs with: sudo journalctl -u ${SERVICE_NAME} -f"
+    echo
+fi
+
+# Step 3: Create system user and home directory
+echo "Creating system user for agent..."
+if id "$AGENT_USER" &>/dev/null; then
+    echo "✓ User $AGENT_USER already exists"
+else
+    sudo useradd -r -s /bin/false -d "$AGENT_HOME" "$AGENT_USER"
+    echo "✓ User $AGENT_USER created"
+fi
+
+echo "Creating local API access group..."
+if getent group "$LOCAL_API_GROUP" >/dev/null 2>&1; then
+    echo "✓ Group $LOCAL_API_GROUP already exists"
+else
+    sudo groupadd --system "$LOCAL_API_GROUP"
+    echo "✓ Group $LOCAL_API_GROUP created"
+fi
+
+if id -nG "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$LOCAL_API_GROUP"; then
+    echo "✓ $AGENT_USER already in $LOCAL_API_GROUP group"
+else
+    sudo usermod -aG "$LOCAL_API_GROUP" "$AGENT_USER"
+    echo "✓ Added $AGENT_USER to $LOCAL_API_GROUP group (local API socket ownership)"
+fi
+
+# Grant docker socket access so the container scanner can reach the daemon.
+# Sudoers entries below only cover pull/inspect; IsAvailable() pings the
+# unix socket, which is root:docker. Membership is the standard pattern.
+if getent group docker >/dev/null 2>&1; then
+    if id -nG "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        echo "✓ $AGENT_USER already in docker group"
+    else
+        sudo usermod -aG docker "$AGENT_USER"
+        echo "✓ Added $AGENT_USER to docker group (socket access for container scanner)"
+    fi
+else
+    echo "[INFO] [installer] [docker] docker group absent — container scanner will report unavailable"
+fi
+
+# Create home directory structure
+if [ ! -d "$AGENT_HOME" ]; then
+    # Create nested directory structure
+    sudo mkdir -p "$BASE_DIR"
+    sudo mkdir -p "$AGENT_HOME"
+    sudo mkdir -p "$AGENT_HOME/cache"
+    sudo mkdir -p "$AGENT_HOME/state"
+    sudo mkdir -p "$AGENT_CONFIG_DIR"
+    sudo mkdir -p "$SERVER_KEY_DIR"
+    sudo mkdir -p "$AGENT_LOG_DIR"
+
+    # Set ownership and permissions
+    sudo chown -R "$AGENT_USER:$AGENT_USER" "$BASE_DIR"
+    sudo chmod 750 "$AGENT_HOME/cache"
+    sudo chmod 750 "$AGENT_HOME/state"
+    sudo chmod 755 "$AGENT_CONFIG_DIR"
+    sudo chown "$AGENT_USER:$AGENT_USER" "$SERVER_KEY_DIR"
+    sudo chmod 755 "$SERVER_KEY_DIR"
+    sudo chmod 755 "$AGENT_LOG_DIR"
+
+    echo "✓ Agent directory structure created:"
+    echo "  - Agent home: $AGENT_HOME"
+    echo "  - Config: $AGENT_CONFIG_DIR"
+    echo "  - Server key cache: $SERVER_KEY_DIR"
+    echo "  - Logs: $AGENT_LOG_DIR"
+fi
+
+# Local-API / Desktop access chain — enforced on EVERY run, not just first
+# install. Upgrades from older versions carry agent:agent 700 dirs that
+# block the ${LOCAL_API_GROUP} group from traversing to the socket, which
+# leaves Desktop installed but unable to connect. Idempotent by design.
+# 710/750: group gets traverse only on the path, read on the socket dir;
+# the agent re-asserts socket dir/file ownership itself on startup.
+sudo mkdir -p "$AGENT_HOME/localapi"
+sudo chown "$AGENT_USER:$LOCAL_API_GROUP" "$BASE_DIR" "$AGENT_HOME" "$AGENT_HOME/localapi"
+sudo chmod 710 "$BASE_DIR"
+sudo chmod 710 "$AGENT_HOME"
+sudo chmod 750 "$AGENT_HOME/localapi"
+echo "✓ Local API access chain enforced ($BASE_DIR -> $AGENT_HOME/localapi, group $LOCAL_API_GROUP)"
+
+# Step 4: Install sudoers configuration with OS-specific commands
+PM=$(detect_package_manager)
+echo "Detected package manager: $PM"
+echo "Installing sudoers configuration..."
+
+case "$PM" in
+    apt)
+        cat <<'EOF' | sudo tee "$SUDOERS_FILE" > /dev/null
+# RedFlag Agent minimal sudo permissions - APT
+# apt discovery needs no sudo — it runs unprivileged with lists/cache/state
+# redirected to an agent-writable temp dir (installer/discovery.go). No apt grants.
+
+# Disable lecture (first-time prompt) — agent runs as a service with no TTY
+Defaults:{{.AgentUser}} !lecture
+
+EOF
+        ;;
+    dnf|yum)
+        cat <<'EOF' | sudo tee "$SUDOERS_FILE" > /dev/null
+# RedFlag Agent minimal sudo permissions - DNF/YUM
+# DNF discovery needs no sudo — it runs unprivileged with log/cache redirected
+# to an agent-writable temp dir (installer/discovery.go). No dnf discovery grants.
+
+# Disable lecture (first-time prompt) — agent runs as a service with no TTY
+Defaults:{{.AgentUser}} !lecture
+
+EOF
+        ;;
+    pacman)
+        cat <<'EOF' | sudo tee "$SUDOERS_FILE" > /dev/null
+# RedFlag Agent minimal sudo permissions - Pacman
+# Discovery and closure resolution use an unprivileged private pacman database.
+# The host sync database is never refreshed through sudo.
+
+# Disable lecture (first-time prompt) — agent runs as a service with no TTY
+Defaults:{{.AgentUser}} !lecture
+
+EOF
+        ;;
+    *)
+        cat <<'EOF' | sudo tee "$SUDOERS_FILE" > /dev/null
+# RedFlag Agent minimal sudo permissions - Generic (APT and DNF)
+# Both apt and dnf discovery run unprivileged (lists/log/cache redirected to an
+# agent-writable temp dir, installer/discovery.go). No discovery grants.
+
+# Disable lecture (first-time prompt) — agent runs as a service with no TTY
+Defaults:{{.AgentUser}} !lecture
+
+EOF
+        ;;
+esac
+
+# Fleet hosts receive capability-token execution only. Local mint and envelope
+# authority are provisioned by
+# scripts/provision-standalone-authority.sh and must never exist beside a fleet
+# credential. Package-manager commands never appear in sudoers.
+cat <<'EOF' | sudo tee -a "$SUDOERS_FILE" > /dev/null
+{{.AgentUser}} ALL=(root) NOPASSWD: /usr/bin/systemd-run --wait --property=ProtectSystem=no -- /usr/local/bin/redflag-helper --token-file /var/lib/redflag/agent/tokens/* --result-file /var/lib/redflag/agent/results/*
+EOF
+
+# No Docker grants: the agent reaches the docker socket via the docker group
+# (added above), so docker discovery/pull need no sudo.
+# No self-update grants: the binary swap (cp/.bak/chmod/systemctl restart) is
+# performed by the privileged helper under a signed capability, not by the
+# agent. The fixed helper file protocol above is the agent's only sudo.
+
+sudo chmod 440 "$SUDOERS_FILE"
+if visudo -c -f "$SUDOERS_FILE" &>/dev/null; then
+    echo "✓ Sudoers configuration installed and validated"
+else
+    echo "⚠ Sudoers configuration validation failed - using generic version"
+fi
+
+# Step 4b: Install polkit rule for transient unit management
+# The agent's only sudo is a fixed `systemd-run ... redflag-helper` protocol. systemd-run
+# spawns a transient unit over the system D-Bus, which polkit gates behind
+# org.freedesktop.systemd1.manage-units (auth_admin). polkit evaluates the
+# original caller ({{.AgentUser}}), so without this rule the helper invocation —
+# and therefore every gated install and the agent self-update — is denied on a
+# TTY-less service. The sudoers line above pins the exact command shape; this
+# grants the matching D-Bus permission to the same user, nothing wider.
+POLKIT_RULES_DIR="/etc/polkit-1/rules.d"
+POLKIT_RULE_FILE="${POLKIT_RULES_DIR}/50-redflag-agent.rules"
+if [ -d "$POLKIT_RULES_DIR" ]; then
+    cat <<'EOF' | sudo tee "$POLKIT_RULE_FILE" > /dev/null
+// RedFlag Agent — allow the service user to manage transient systemd units only.
+// Scope: manage-transient-units (not manage-units). The agent can only start/stop
+// units it creates via systemd-run, not arbitrary system services. The matching
+// sudoers grant pins the command line to the helper invocation.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-transient-units" &&
+        subject.user == "{{.AgentUser}}") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+    sudo chmod 644 "$POLKIT_RULE_FILE"
+    echo "✓ Polkit rule installed (transient unit management for {{.AgentUser}})"
+else
+    echo "⚠ ${POLKIT_RULES_DIR} not found — polkit JS rules unsupported on this host."
+    echo "  Gated installs and agent self-update will be denied until a polkit rule"
+    echo "  granting org.freedesktop.systemd1.manage-units to {{.AgentUser}} is added."
+fi
+
+# Step 5: Stop existing service
+if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+    echo "Stopping existing RedFlag agent service..."
+    sudo systemctl stop ${SERVICE_NAME}
+fi
+
+# Step 6: Create directories
+echo "Creating directories..."
+sudo mkdir -p "${AGENT_CONFIG_DIR}"
+sudo mkdir -p "${CONFIG_DIR}/backups"  # Legacy backup location
+sudo mkdir -p "${SERVER_KEY_DIR}"   # Server public key cache (TOFU model)
+sudo mkdir -p "$AGENT_HOME"
+sudo mkdir -p "$AGENT_LOG_DIR"
+
+# ---- Manifest-driven component download ----
+# Fetch the signed release manifest once, verify its Ed25519 signature against
+# the TOFU-pinned server public key, then drive every component download from
+# the manifest's components + artifacts tables. No hardcoded binary URLs.
+MANIFEST_URL="{{.ServerURL}}/api/v1/manifest?version=${VERSION}"
+SERVER_PUBKEY="{{.ServerPublicKey}}"
+
+if [ -z "$SERVER_PUBKEY" ]; then
+    echo "ERROR: No server public key embedded in installer — cannot establish cold-start trust."
+    exit 1
+fi
+
+# Ensure python3 + cryptography are available (needed for manifest verification
+# and JSON parsing of the manifest).
+if ! python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey" 2>/dev/null; then
+    echo "Installing python3-cryptography for manifest verification..."
+    case "$PM" in
+        apt)     apt-get install -y python3-cryptography 2>/dev/null || true ;;
+        dnf|yum) dnf install -y python3-cryptography 2>/dev/null || true ;;
+        pacman)  pacman -S --noconfirm python-cryptography 2>/dev/null || true ;;
+        *)       pip3 install cryptography 2>/dev/null || true ;;
+    esac
+fi
+if ! python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey" 2>/dev/null; then
+    echo "ERROR: Could not provide python3-cryptography — cannot verify the release manifest."
+    exit 1
+fi
+
+# Fetch and verify the release manifest.
+echo "Fetching release manifest..."
+TMP_MANIFEST=$(mktemp)
+TMP_MANIFEST_HDR=$(mktemp)
+if ! curl -fsSL -o "$TMP_MANIFEST" -D "$TMP_MANIFEST_HDR" "$MANIFEST_URL"; then
+    echo "ERROR: Failed to fetch release manifest from ${MANIFEST_URL}"
+    rm -f "$TMP_MANIFEST" "$TMP_MANIFEST_HDR"
+    exit 1
+fi
+MANIFEST_SIG=$(grep -i "x-content-signature" "$TMP_MANIFEST_HDR" | awk '{print $2}' | tr -d '\r\n')
+MANIFEST_KEY_ID=$(grep -i "x-key-id" "$TMP_MANIFEST_HDR" | awk '{print $2}' | tr -d '\r\n')
+rm -f "$TMP_MANIFEST_HDR"
+if [ -z "$MANIFEST_SIG" ]; then
+    echo "ERROR: Release manifest is unsigned (no X-Content-Signature header) — refusing to install."
+    rm -f "$TMP_MANIFEST"
+    exit 1
+fi
+
+# Verify Ed25519 signature over the verbatim manifest body.
+MANIFEST_VERIFY=$(mktemp)
+cat <<'MANIFEST_EOF' > "$MANIFEST_VERIFY"
+import sys, json
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
+pubkey_path, manifest_path, sig_path = sys.argv[1:4]
+with open(pubkey_path) as f: pub = bytes.fromhex(f.read().strip())
+with open(sig_path) as f: sig = bytes.fromhex(f.read().strip())
+with open(manifest_path, 'rb') as f: body = f.read()
+try:
+    Ed25519PublicKey.from_public_bytes(pub).verify(sig, body)
+except InvalidSignature:
+    print("manifest signature invalid", file=sys.stderr); sys.exit(2)
+except Exception as e:
+    print("manifest verify error: %s" % e, file=sys.stderr); sys.exit(2)
+sys.exit(0)
+MANIFEST_EOF
+echo "$SERVER_PUBKEY" > "${TMP_MANIFEST}.pub"
+echo "$MANIFEST_SIG"  > "${TMP_MANIFEST}.sig"
+set +e
+python3 "$MANIFEST_VERIFY" "${TMP_MANIFEST}.pub" "$TMP_MANIFEST" "${TMP_MANIFEST}.sig"
+MANIFEST_RC=$?
+set -e
+rm -f "$MANIFEST_VERIFY" "${TMP_MANIFEST}.pub" "${TMP_MANIFEST}.sig"
+if [ $MANIFEST_RC -ne 0 ]; then
+    echo "ERROR: Release manifest signature verification failed (rc=$MANIFEST_RC) — refusing to install."
+    rm -f "$TMP_MANIFEST"
+    exit 1
+fi
+echo "✓ Manifest signature verified (key ${MANIFEST_KEY_ID})"
+
+# --- Supply-chain posture: RedFlag's own dependency attestation ---------------
+# The server folds its build-time scan verdict + accepted exceptions into the
+# signed manifest. We just verified that signature, so this posture cannot be
+# forged by editing a file next to the binary. Surface it, and refuse on a
+# BLOCKED posture (a build carrying an un-accepted vulnerability) — the same
+# fail-closed stance the binary takes at runtime. An UN-ATTESTED posture (a
+# server built from source outside RedFlag's release pipeline) is a loud warning,
+# not a refusal: the operator built it and owns that trust.
+POSTURE_CHECK=$(mktemp)
+cat <<'POSTURE_EOF' > "$POSTURE_CHECK"
+import sys, json
+p = (json.load(open(sys.argv[1])).get("supply_chain") or {})
+scans = p.get("scans", [])
+sub = p.get("substrate", {})
+blocked = [s for s in scans if s.get("blocked", 0) > 0]
+print("Supply-chain posture:")
+if sub:
+    print("  built on: " + ", ".join("%s %s" % (k, v) for k, v in sub.items() if v))
+for s in scans:
+    print("  %-6s %-12s %s (accepted=%d blocked=%d)" % (
+        s.get("ecosystem", ""), s.get("tool", ""), s.get("status", ""),
+        s.get("accepted", 0), s.get("blocked", 0)))
+for e in p.get("exceptions", []):
+    print("  accepted exception: %s" % e.get("id", ""))
+if blocked:
+    sys.exit(4)
+if not p.get("attested"):
+    sys.exit(3)
+POSTURE_EOF
+# set -e is active (line 8); capture the posture rc the same way the manifest
+# block above does (479-482). Without this guard, the python's exit 3 (un-attested)
+# or 4 (blocked) aborts the script before POSTURE_RC is ever assigned — turning the
+# designed "warn on un-attested" into a hard install refusal and negating the
+# offline-degrades-honestly posture the build emits.
+set +e
+python3 "$POSTURE_CHECK" "$TMP_MANIFEST"
+POSTURE_RC=$?
+set -e
+rm -f "$POSTURE_CHECK"
+if [ "$POSTURE_RC" = "4" ]; then
+    rm -f "$TMP_MANIFEST"
+    echo "ERROR: Server build carries un-accepted dependency vulnerabilities — refusing to install." >&2
+    exit 1
+elif [ "$POSTURE_RC" = "3" ]; then
+    echo "WARNING: This server was built outside RedFlag's gated release pipeline — its dependency posture is not independently attested." >&2
+elif [ "$POSTURE_RC" = "0" ]; then
+    echo "✓ Supply-chain posture attested"
+fi
+
+# Resolve components → artifacts for this platform/arch.
+# The Python helper reads the manifest, pairs each component with its matching
+# artifact entry, and emits tab-separated lines:
+#   name|kind|required|version_cmd|filename|sha256|provisioning_csv
+MANIFEST_RESOLVE=$(mktemp)
+cat <<'MANIFEST_EOF' > "$MANIFEST_RESOLVE"
+import sys, json
+platform, arch = sys.argv[1:3]
+m = json.load(open(sys.argv[3]))
+# Index artifacts by (platform, architecture)
+art_map = {}
+for a in m.get("artifacts", []):
+    art_map[(a.get("platform",""), a.get("architecture",""))] = a
+for c in m.get("components", []):
+    name = c.get("name","")
+    kind = c.get("kind","")
+    req  = "true" if c.get("required", False) else "false"
+    vcmd = c.get("version_cmd", "--version")
+    prov = ",".join(c.get("provisioning", []))
+    # Match: binary components look for <name>-<platform> in artifacts.
+    # agent=linux, helper=helper-linux, desktop=desktop-linux, server=server-linux
+    if kind == "embedded":
+        # Embedded components have no artifact to download — they're built into
+        # another component (web is embedded in server). Checkoff is server-side.
+        if not req == "true" and "--skip" in sys.argv:
+            continue
+        print("%s|%s|%s|%s|||%s" % (name, kind, req, vcmd, prov))
+        continue
+    if kind == "docker":
+        print("%s|%s|%s|%s|||%s" % (name, kind, req, vcmd, prov))
+        continue
+    # Binary components: try <name>-<platform> first, then <platform> for agent
+    candidates = ["%s-%s" % (name, platform), platform]
+    found = None
+    for cand in candidates:
+        key = (cand, arch)
+        if key in art_map:
+            found = art_map[key]
+            break
+    if found:
+        print("%s|%s|%s|%s|%s|%s|%s" % (
+            name, kind, req, vcmd,
+            found.get("filename",""),
+            found.get("sha256",""),
+            prov))
+    else:
+        if req == "true":
+            print("%s|%s|%s|%s|MISSING||%s" % (name, kind, req, vcmd, prov), file=sys.stderr)
+        else:
+            print("%s|%s|%s|%s|||%s" % (name, kind, req, vcmd, prov))
+MANIFEST_EOF
+
+# The resolver emits component lines to stdout. We read them into a shell loop.
+MANIFEST_LINES=$(mktemp)
+python3 "$MANIFEST_RESOLVE" "$PLATFORM_TAG" "$ARCH_TAG" "$TMP_MANIFEST" > "$MANIFEST_LINES" 2>/dev/null
+rm -f "$MANIFEST_RESOLVE" "$TMP_MANIFEST"
+
+# Walk each component from the manifest.
+echo ""
+echo "=== Installing components ==="
+HAD_FAILURES=false
+while IFS='|' read -r comp_name comp_kind comp_req comp_vcmd comp_file comp_sha comp_prov; do
+    [ -z "$comp_name" ] && continue
+    echo ""
+    echo "--- ${comp_name} (${comp_kind}) ---"
+
+    # Embedded and docker components are not downloaded here — they're verified
+    # at checkoff time.
+    if [ "$comp_kind" = "embedded" ]; then
+        checkoff "$comp_name" "ok" "embedded (verified server-side)"
+        continue
+    fi
+    if [ "$comp_kind" = "docker" ]; then
+        # The server runs as a locally-built container (docker compose build) on
+        # the server host. Verify the *running* redflag-server container's
+        # version — never pull from a registry. Hosts with no server container
+        # (agent-only installs) skip cleanly; the server component is not their
+        # concern.
+        if command -v docker >/dev/null 2>&1 && docker container inspect redflag-server >/dev/null 2>&1; then
+            DOCKER_VER=$(docker exec redflag-server ./redflag-server --version 2>/dev/null | head -1 || echo "unknown")
+            if echo "$DOCKER_VER" | grep -q "v${VERSION}"; then
+                checkoff "$comp_name" "ok" "running container ${DOCKER_VER}"
+            else
+                checkoff "$comp_name" "fail" "running container reports ${DOCKER_VER}, expected v${VERSION}"
+                HAD_FAILURES=true
+            fi
+        else
+            checkoff "$comp_name" "skip" "no redflag-server container on this host (agent-only install)"
+        fi
+        continue
+    fi
+
+    # Binary component.
+    if [ -z "$comp_file" ] || [ -z "$comp_sha" ]; then
+        if [ "$comp_req" = "true" ]; then
+            echo "ERROR: Required component ${comp_name} has no artifact for ${PLATFORM_TAG}/${ARCH_TAG}"
+            checkoff "$comp_name" "fail" "no artifact for ${PLATFORM_TAG}/${ARCH_TAG}"
+            HAD_FAILURES=true
+        else
+            echo "INFO: Optional component ${comp_name} not available for ${PLATFORM_TAG}/${ARCH_TAG} — skipping"
+            checkoff "$comp_name" "skip" "not available for ${PLATFORM_TAG}/${ARCH_TAG}"
+        fi
+        continue
+    fi
+
+    COMP_URL="{{.ServerURL}}/api/v1/downloads/${comp_name}-${ARCH_TAG}?version=${VERSION}"
+    # The agent binary uses the bare platform tag (linux), while helper/desktop
+    # use <name>-<platform>. Adjust the URL pattern to match download endpoints.
+    case "$comp_name" in
+        agent)  COMP_URL="{{.ServerURL}}/api/v1/downloads/${PLATFORM_TAG}-${ARCH_TAG}?version=${VERSION}" ;;
+        helper) COMP_URL="{{.ServerURL}}/api/v1/helper/${ARCH_TAG}?version=${VERSION}" ;;
+        desktop) COMP_URL="{{.ServerURL}}/api/v1/downloads/desktop-${ARCH_TAG}?version=${VERSION}" ;;
+    esac
+
+    # Checkoff-only: skip download, verify installed binary + provisioning.
+    if $CHECKOFF_ONLY; then
+        BIN_PATH=""
+        case "$comp_name" in
+            agent)   BIN_PATH="${INSTALL_DIR}/${SERVICE_NAME}" ;;
+            helper)  BIN_PATH="${INSTALL_DIR}/redflag-helper" ;;
+            desktop) BIN_PATH="${INSTALL_DIR}/redflag-desktop" ;;
+        esac
+        if [ -x "$BIN_PATH" ]; then
+            BIN_VER=$("$BIN_PATH" "$comp_vcmd" 2>/dev/null || echo "unknown")
+            if echo "$BIN_VER" | grep -q "v${VERSION}"; then
+                checkoff "$comp_name" "ok" "version ${BIN_VER}"
+            else
+                checkoff "$comp_name" "fail" "version ${BIN_VER}, expected v${VERSION}"
+                HAD_FAILURES=true
+            fi
+            # Provisioning checks (desktop only).
+            if [ -n "$comp_prov" ]; then
+                IFS=',' read -ra PROV_CHECKS <<< "$comp_prov"
+                for check in "${PROV_CHECKS[@]}"; do
+                    case "$check" in
+                        autostart_entry)
+                            if [ -f /etc/xdg/autostart/redflag-desktop.desktop ]; then
+                                checkoff "desktop:autostart" "ok" "autostart entry present"
+                            else
+                                checkoff "desktop:autostart" "fail" "autostart entry missing"
+                                HAD_FAILURES=true
+                            fi
+                            ;;
+                        redflag-local_group)
+                            if getent group "$LOCAL_API_GROUP" >/dev/null 2>&1; then
+                                checkoff "desktop:group" "ok" "group ${LOCAL_API_GROUP} exists"
+                            else
+                                checkoff "desktop:group" "fail" "group ${LOCAL_API_GROUP} missing"
+                                HAD_FAILURES=true
+                            fi
+                            ;;
+                        desktop_user_membership)
+                            if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+                                if id -nG "$SUDO_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$LOCAL_API_GROUP"; then
+                                    checkoff "desktop:membership" "ok" "${SUDO_USER} in ${LOCAL_API_GROUP}"
+                                else
+                                    checkoff "desktop:membership" "fail" "${SUDO_USER} not in ${LOCAL_API_GROUP}"
+                                    HAD_FAILURES=true
+                                fi
+                            else
+                                checkoff "desktop:membership" "skip" "no desktop user detected"
+                            fi
+                            ;;
+                    esac
+                done
+            fi
+        else
+            if [ "$comp_req" = "true" ]; then
+                checkoff "$comp_name" "fail" "binary not found at ${BIN_PATH}"
+                HAD_FAILURES=true
+            else
+                checkoff "$comp_name" "skip" "binary not installed"
+            fi
+        fi
+        continue
+    fi
+
+    # Download and verify.
+    echo "Downloading ${comp_name}..."
+    TMP_COMP=$(mktemp)
+    TMP_COMP_HDR=$(mktemp)
+    if ! curl -fsSL -o "$TMP_COMP" -D "$TMP_COMP_HDR" "$COMP_URL"; then
+        if [ "$comp_req" = "true" ]; then
+            echo "ERROR: Failed to download ${comp_name} from ${COMP_URL}"
+            checkoff "$comp_name" "fail" "download failed"
+            HAD_FAILURES=true
+            rm -f "$TMP_COMP" "$TMP_COMP_HDR"
+            continue
+        else
+            echo "INFO: ${comp_name} download failed (optional — skipping)"
+            checkoff "$comp_name" "skip" "download failed (optional)"
+            rm -f "$TMP_COMP" "$TMP_COMP_HDR"
+            continue
+        fi
+    fi
+    rm -f "$TMP_COMP_HDR"
+
+    # Verify hash against manifest.
+    ACTUAL_SHA=$(sha256sum "$TMP_COMP" | awk '{print $1}')
+    if [ "$comp_sha" != "$ACTUAL_SHA" ]; then
+        echo "ERROR: ${comp_name} hash mismatch"
+        echo "  expected (manifest): $comp_sha"
+        echo "  actual:              $ACTUAL_SHA"
+        checkoff "$comp_name" "fail" "hash mismatch"
+        HAD_FAILURES=true
+        rm -f "$TMP_COMP"
+        continue
+    fi
+    echo "✓ ${comp_name} hash verified"
+
+    # Install the binary.
+    case "$comp_name" in
+        agent)
+            # Save server public key for TOFU (already done above conceptually,
+            # but we do it here since the agent binary is now verified).
+            if [ -n "$SERVER_PUBKEY" ]; then
+                echo -n "$SERVER_PUBKEY" | sudo tee "${SERVER_KEY_DIR}/server_public_key" > /dev/null
+                sudo chown {{.AgentUser}}:{{.AgentUser}} "${SERVER_KEY_DIR}/server_public_key"
+            fi
+            # Per-binary signature is covered by the manifest (already verified).
+            # The agent trusts the manifest-signed hash chain.
+            sudo mv "$TMP_COMP" "${INSTALL_DIR}/${SERVICE_NAME}"
+            sudo chmod +x "${INSTALL_DIR}/${SERVICE_NAME}"
+            if command -v restorecon &>/dev/null; then
+                sudo restorecon "${INSTALL_DIR}/${SERVICE_NAME}" 2>/dev/null || true
+            fi
+            if command -v setcap &>/dev/null; then
+                sudo setcap cap_sys_ptrace=eip "${INSTALL_DIR}/${SERVICE_NAME}"
+                echo "✓ CAP_SYS_PTRACE granted (display/process discovery)"
+            fi
+            checkoff "$comp_name" "ok" "installed at ${INSTALL_DIR}/${SERVICE_NAME}"
+            ;;
+        helper)
+            sudo mv "$TMP_COMP" "${INSTALL_DIR}/redflag-helper"
+            sudo chown root:root "${INSTALL_DIR}/redflag-helper"
+            sudo chmod 755 "${INSTALL_DIR}/redflag-helper"
+            if command -v restorecon &>/dev/null; then
+                sudo restorecon "${INSTALL_DIR}/redflag-helper" 2>/dev/null || true
+            fi
+            # Helper state dir, root-only.
+            sudo mkdir -p "${BASE_DIR}/helper"
+            sudo chown root:root "${BASE_DIR}/helper"
+            sudo chmod 700 "${BASE_DIR}/helper"
+            # Trusted-keys keyring for the helper.
+            HELPER_KEYRING_DIR="${CONFIG_DIR}/trusted-keys"
+            sudo mkdir -p "$HELPER_KEYRING_DIR"
+            echo -n "$SERVER_PUBKEY" | sudo tee "${HELPER_KEYRING_DIR}/server.pub" > /dev/null
+            sudo chown -R root:root "$HELPER_KEYRING_DIR"
+            sudo chmod 755 "$HELPER_KEYRING_DIR"
+            sudo chmod 644 "${HELPER_KEYRING_DIR}/server.pub"
+            checkoff "$comp_name" "ok" "installed at ${INSTALL_DIR}/redflag-helper"
+            ;;
+        desktop)
+            sudo mv "$TMP_COMP" "${INSTALL_DIR}/redflag-desktop"
+            sudo chmod 755 "${INSTALL_DIR}/redflag-desktop"
+            if command -v restorecon &>/dev/null; then
+                sudo restorecon "${INSTALL_DIR}/redflag-desktop" 2>/dev/null || true
+            fi
+            # Autostart entry (provisioning check: autostart_entry).
+            XDG_AUTOSTART_DIR="/etc/xdg/autostart"
+            if [ -d "$XDG_AUTOSTART_DIR" ] || sudo mkdir -p "$XDG_AUTOSTART_DIR"; then
+                cat <<EOF | sudo tee "${XDG_AUTOSTART_DIR}/redflag-desktop.desktop" > /dev/null
+[Desktop Entry]
+Type=Application
+Name=RedFlag
+Comment=RedFlag local-machine operations console
+Exec=${INSTALL_DIR}/redflag-desktop
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+                sudo chmod 644 "${XDG_AUTOSTART_DIR}/redflag-desktop.desktop"
+            fi
+            # Add invoking user to redflag-local group (provisioning: desktop_user_membership).
+            if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+                if id -nG "$SUDO_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$LOCAL_API_GROUP"; then
+                    echo "✓ $SUDO_USER already in $LOCAL_API_GROUP group"
+                else
+                    sudo usermod -aG "$LOCAL_API_GROUP" "$SUDO_USER"
+                    echo "✓ Added $SUDO_USER to $LOCAL_API_GROUP (Desktop socket access — re-login to take effect)"
+                fi
+            fi
+            checkoff "$comp_name" "ok" "installed at ${INSTALL_DIR}/redflag-desktop"
+            ;;
+    esac
+done < "$MANIFEST_LINES"
+rm -f "$MANIFEST_LINES"
+
+# Fail the install if any required component failed.
+if $HAD_FAILURES; then
+    echo ""
+    echo "ERROR: One or more required components failed to install."
+    emit_checkoff_report
+    exit 1
+fi
+
+# Save server public key for TOFU model.
+if [ -n "$SERVER_PUBKEY" ]; then
+    echo -n "$SERVER_PUBKEY" | sudo tee "${SERVER_KEY_DIR}/server_public_key" > /dev/null
+    sudo chown {{.AgentUser}}:{{.AgentUser}} "${SERVER_KEY_DIR}/server_public_key"
+    echo "Server public key saved for TOFU verification"
+fi
+
+# Step 8: Handle configuration
+# IMPORTANT: The agent handles its own migration on first start.
+# We either preserve existing config OR create a minimal template.
+if [ -f "${AGENT_CONFIG_DIR}/config.json" ]; then
+    echo "[CONFIG] Upgrade detected - preserving existing configuration"
+    echo "[CONFIG] Agent will handle migration automatically on first start"
+    echo "[CONFIG] Backup created at: ${BACKUP_DIR}"
+else
+    echo "[CONFIG] Fresh install - generating minimal configuration with registration token"
+    # Create minimal config template - agent will populate missing fields on first start
+    sudo tee "${AGENT_CONFIG_DIR}/config.json" > /dev/null <<EOF
+{
+    "version": 5,
+    "agent_version": "${VERSION}",
+    "agent_id": "",
+    "token": "",
+    "refresh_token": "",
+    "registration_token": "{{.RegistrationToken}}",
+    "machine_id": "",
+    "check_in_interval": 300,
+    "server_url": "{{.ServerURL}}",
+    "network": {
+        "timeout": 30000000000,
+        "retry_count": 3,
+        "retry_delay": 5000000000,
+        "max_idle_conn": 10
+    },
+    "proxy": {
+        "enabled": false
+    },
+    "tls": {
+        "enabled": false,
+        "insecure_skip_verify": false
+    },
+    "logging": {
+        "level": "info",
+        "max_size": 100,
+        "max_backups": 3,
+        "max_age": 28
+    },
+    "subsystems": {
+        "system": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "filesystem": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "network": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "processes": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "updates": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": false, "failure_threshold": 0, "failure_window": 0, "open_duration": 0, "half_open_attempts": 0}},
+        "storage": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}}
+    },
+    "security": {
+        "ed25519_verification": true,
+        "nonce_validation": true,
+        "machine_id_binding": true
+    }
+}
+EOF
+fi
+
+# Step 9: Set permissions on config file
+sudo chmod 600 "${AGENT_CONFIG_DIR}/config.json"
+
+# Step 10: Create systemd service with security hardening
+echo "Creating systemd service with security configuration..."
+cat <<EOF | sudo tee /etc/systemd/system/${SERVICE_NAME}.service
+[Unit]
+Description=RedFlag Security Agent
+After=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User={{.AgentUser}}
+Group={{.AgentUser}}
+SupplementaryGroups=${LOCAL_API_GROUP}
+WorkingDirectory={{.AgentHome}}
+ExecStart=${INSTALL_DIR}/${SERVICE_NAME}
+Restart=always
+RestartSec=30
+RestartPreventExitStatus=255
+
+# Security hardening
+# Note: NoNewPrivileges disabled to allow sudo for package management
+# INSTALL_DIR is in ReadWritePaths so the sudo'd cp during agent self-upgrade
+# can write the new binary and .bak alongside it — ProtectSystem=strict
+# otherwise makes the mount RO inside the unit's namespace and sudo does
+# not bypass that (sudo inherits the mount namespace).
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{.AgentHome}} {{.AgentHome}}/cache {{.AgentHome}}/state {{.AgentHome}}/migration_backups {{.AgentConfigDir}} {{.AgentLogDir}} {{.ServerKeyDir}} ${INSTALL_DIR}
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+# ProtectControlGroups left at default (false) — the agent invokes
+# systemd-run to spawn the helper as a transient unit, which requires
+# cgroup creation.
+
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# CAP_SYS_PTRACE: lets the agent read /proc/<pid>/environ from the logged-in
+# user's session processes. Required for display/Wayland discovery (screenshot
+# capture) and per-process telemetry. AmbientCapabilities grants it to the
+# process regardless of file caps, so self-upgrade (binary replacement) does
+# not lose it.
+# Deliberately no CapabilityBoundingSet here: restricting the bounding set to
+# CAP_SYS_PTRACE would strip CAP_SETUID/CAP_SETGID from setuid binaries run
+# inside the unit — sudo would fail, killing package discovery and the helper
+# invocation path.
+AmbientCapabilities=CAP_SYS_PTRACE
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${SERVICE_NAME}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Set proper permissions on directories
+echo "Setting directory permissions..."
+sudo chown -R {{.AgentUser}}:{{.AgentUser}} "{{.AgentConfigDir}}"
+sudo chown {{.AgentUser}}:{{.AgentUser}} "{{.AgentConfigDir}}/config.json"
+sudo chmod 600 "{{.AgentConfigDir}}/config.json"
+sudo chown -R {{.AgentUser}}:{{.AgentUser}} "{{.AgentHome}}"
+sudo chown {{.AgentUser}}:${LOCAL_API_GROUP} "${BASE_DIR}"
+sudo chown {{.AgentUser}}:${LOCAL_API_GROUP} "{{.AgentHome}}"
+sudo chmod 710 "${BASE_DIR}"
+sudo chmod 710 "{{.AgentHome}}"
+sudo mkdir -p "{{.AgentHome}}/localapi"
+sudo chown {{.AgentUser}}:${LOCAL_API_GROUP} "{{.AgentHome}}/localapi"
+sudo chmod 750 "{{.AgentHome}}/localapi"
+sudo chown -R {{.AgentUser}}:{{.AgentUser}} "{{.AgentLogDir}}"
+sudo chmod 750 "{{.AgentLogDir}}"
+# Server public key directory - agent needs to write the TOFU cached key here
+sudo chown {{.AgentUser}}:{{.AgentUser}} "${SERVER_KEY_DIR}"
+sudo chmod 755 "${SERVER_KEY_DIR}"
+
+# Decide install flow per docs/AGENT_LIFECYCLE.md:
+#   Fresh Install  → no usable local config → call --register
+#   Upgrade In Place → local config has non-empty refresh_token → skip --register
+# Token in URL is ignored on the upgrade path; refresh_token authenticates.
+EXISTING_REFRESH_TOKEN=""
+if [ -f "${AGENT_CONFIG_DIR}/config.json" ]; then
+    if command -v jq &>/dev/null; then
+        EXISTING_REFRESH_TOKEN="$(sudo jq -r '.refresh_token // ""' "${AGENT_CONFIG_DIR}/config.json" 2>/dev/null || echo "")"
+    else
+        # jq absent — fall back to a tolerant grep. The JSON is written by us
+        # at install time; the field is on its own line. This is intentionally
+        # tight, not a general JSON parser.
+        EXISTING_REFRESH_TOKEN="$(sudo grep -oE '"refresh_token"[[:space:]]*:[[:space:]]*"[^"]+"' "${AGENT_CONFIG_DIR}/config.json" 2>/dev/null | sed -E 's/.*"refresh_token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+    fi
+fi
+
+if [ -n "${EXISTING_REFRESH_TOKEN}" ]; then
+    echo "[INFO] [installer] [register] Upgrade in place — existing credentials detected, skipping registration"
+    echo "[INFO] [installer] [register] Token in URL is ignored on the upgrade path; refresh_token authenticates"
+elif [ -n "{{.RegistrationToken}}" ]; then
+    echo "[INFO] [installer] [register] Registering agent with server..."
+    if sudo -u "{{.AgentUser}}" "${INSTALL_DIR}/${SERVICE_NAME}" --server "{{.ServerURL}}" --token "{{.RegistrationToken}}" --register; then
+        echo "[SUCCESS] [installer] [register] Agent registered successfully"
+        echo "[INFO] [installer] [register] Agent ID assigned, configuration updated"
+    else
+        echo "[ERROR] [installer] [register] Registration failed - check token validity and server connectivity"
+        echo "[WARN] [installer] [register] Agent installed but not registered. Service will not start."
+        echo ""
+        echo "[INFO] [installer] [register] To retry registration manually:"
+        echo "[INFO] [installer] [register]   sudo -u {{.AgentUser}} ${INSTALL_DIR}/${SERVICE_NAME} --server {{.ServerURL}} --token YOUR_TOKEN --register"
+        echo "[INFO] [installer] [register] Then start service:"
+        echo "[INFO] [installer] [register]   sudo systemctl start ${SERVICE_NAME}"
+        exit 1
+    fi
+else
+    echo "[INFO] [installer] [register] No registration token provided - skipping registration"
+    echo "[INFO] [installer] [register] Service will start but agent will exit until registered"
+    echo "[INFO] [installer] [register] To register manually:"
+    echo "[INFO] [installer] [register]   sudo -u {{.AgentUser}} ${INSTALL_DIR}/${SERVICE_NAME} --server {{.ServerURL}} --token YOUR_TOKEN --register"
+fi
+
+# Step 10b: Provision the host agent_id for the capability-gate helper.
+# The helper runs as root with a clean environment (systemd-run), so it cannot
+# inherit the id from the agent — it reads /etc/redflag/agent_id and refuses any
+# token whose agent_id does not match this host. Written after registration,
+# when the agent has populated its config with the server-assigned id.
+if [ -n "{{.ServerPublicKey}}" ] && [ -f "${AGENT_CONFIG_DIR}/config.json" ]; then
+    PROVISIONED_AGENT_ID=""
+    if command -v jq &>/dev/null; then
+        PROVISIONED_AGENT_ID="$(sudo jq -r '.agent_id // ""' "${AGENT_CONFIG_DIR}/config.json" 2>/dev/null || echo "")"
+    else
+        PROVISIONED_AGENT_ID="$(sudo grep -oE '"agent_id"[[:space:]]*:[[:space:]]*"[^"]+"' "${AGENT_CONFIG_DIR}/config.json" 2>/dev/null | sed -E 's/.*"agent_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+    fi
+    if [ -n "$PROVISIONED_AGENT_ID" ]; then
+        echo -n "$PROVISIONED_AGENT_ID" | sudo tee "${CONFIG_DIR}/agent_id" > /dev/null
+        sudo chown root:root "${CONFIG_DIR}/agent_id"
+        sudo chmod 644 "${CONFIG_DIR}/agent_id"
+        echo "✓ Helper agent_id provisioned (${PROVISIONED_AGENT_ID})"
+    else
+        echo "[WARN] [installer] [helper] agent_id not found in config — helper bind-check will fail until provisioned"
+    fi
+fi
+
+# Step 10e: Emit checkoff report (install-time verification).
+# The manifest was already verified; this records what was actually installed
+# on this host and posts it as a security event.
+emit_checkoff_report
+
+# Step 11: Enable and start service
+echo ""
+echo "Enabling and starting service..."
+sudo systemctl daemon-reload
+sudo systemctl enable ${SERVICE_NAME}
+sudo systemctl start ${SERVICE_NAME}
+
+echo
+if systemctl is-active --quiet ${SERVICE_NAME}; then
+    echo "✓ Installation complete!"
+    echo ""
+    echo "=== Security Information ==="
+    echo "Agent is running with security hardening:"
+    echo "  ✓ Dedicated system user: {{.AgentUser}}"
+    echo "  ✓ Local API group: ${LOCAL_API_GROUP}"
+    echo "  ✓ Limited sudo access for package management only"
+    echo "  ✓ Systemd service with security restrictions"
+    echo "  ✓ Protected configuration directory"
+    echo ""
+    echo "Check status: sudo systemctl status ${SERVICE_NAME}"
+    echo "View logs:    sudo journalctl -u ${SERVICE_NAME} -f"
+else
+    echo "⚠ Installation complete but service not started"
+    echo "  This may be normal for fresh installs awaiting registration"
+    echo ""
+    echo "To start after registration:"
+    echo "  sudo systemctl start ${SERVICE_NAME}"
+fi

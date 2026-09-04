@@ -1,0 +1,23 @@
+[package]
+name = "redflag-desktop"
+version = "0.2.9"
+edition = "2021"
+license = "AGPL-3.0"
+publish = false
+description = "RedFlag native local-machine operations console"
+
+[dependencies]
+anyhow = "1"
+cxx = "1"
+cxx-qt = "0.9"
+cxx-qt-lib = { version = "0.9", features = ["qt_full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+cxx-qt-build = "0.9"
+qt-build-utils = "0.9"
+
+[[bin]]
+name = "redflag-desktop"
+path = "src/main.rs"

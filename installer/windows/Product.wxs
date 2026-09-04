@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RedFlagSetup.msi — native Windows installer for the RedFlag server (INSTALL-002).
+
+  Built with `wixl` (msitools), NOT the official WiX Toolset .NET CLI. The
+  official `wix build` genuinely does not work when the compiler itself runs
+  on Linux — reproduced empirically: even a single-character Directory/@Name
+  fails WIX0389 "not a relative path" on every WiX version tried (4.0.5,
+  4.0.6, 5.0.0, 5.0.2, 6.0.0, 6.0.1). The tool's own output says why:
+  "warning WIX0000: The WiX Toolset only supports Windows... All behavior
+  after this point is undefined." That's not a disclaimer to route around
+  with a workaround — the validator itself is broken cross-platform. wixl is
+  a from-scratch, Linux-native reimplementation of the (older, WiX v3-era)
+  MSI-building grammar, built for exactly this "generate a real Windows MSI
+  from Linux CI" case, and produces a structurally valid MSI (verified with
+  msiinfo tables / msiinfo suminfo) with no cross-platform path bugs. This
+  file therefore uses the WiX v3 schema/dialect (Product+Package as separate
+  elements, explicit Directory nesting, no StandardDirectory shorthand) —
+  wixl's grammar, not v4's.
+
+  Scope (v1): install the already-built, already-signed server binary as a
+  Windows service, with a forward-only upgrade guard. It does NOT bundle
+  PostgreSQL — docker-compose doesn't either (postgres:16-alpine is a
+  separate container); a native install is expected to point at a reachable
+  Postgres the same way the docker path does via config/.env. The installer's
+  job ends where the docker quick-start's does today: "service is running,
+  go to http://localhost:<port>/setup and finish configuration in the
+  browser" (README.md's existing docker flow, same UX, different transport).
+
+  Config: the Go binary only ever reads OS environment variables
+  (server/internal/config/config.go). Docker gets those from compose's
+  env_file:; a native install has no compose layer, so this installer drops
+  a template env file under ProgramData and the service reads it via
+  config.loadNativeConfigFile() — same manual "generate keys, paste into the
+  env file, restart" flow the docker README already documents, not a new UX.
+
+  NOT YET BUILT into this file: install-time manifest signature verification
+  (fetch the release manifest, verify Ed25519 signature, check the server
+  binary's SHA256 before executing) — the cold-start TOFU problem flagged in
+  docs/tasks/INSTALL-002-native-os-installers.md. This installer currently
+  trusts whatever binary CI hands it, same trust level as unzipping a release
+  tarball by hand. That verification layer is the next slice, not this one.
+
+  VERIFIED: built successfully with wixl 0.106 against a real cross-compiled
+  redflag-server-windows-amd64.exe on 2026-07-01 — msiinfo confirms a valid
+  MSI (Directory/Component/Feature/ServiceInstall/ServiceControl tables all
+  populated correctly). NOT yet verified: actually running the installer on
+  a real Windows host (install, service starts, uninstall, upgrade-over
+  itself). That's the next check, ideally on real hardware or a VM.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <!--
+    UpgradeCode must never change for the life of this product — it's the
+    identity that makes the MajorUpgrade forward-only guard below mean
+    anything across releases. Generated once, fixed forever after.
+  -->
+  <Product Id="*"
+           Name="RedFlag Server"
+           Language="1033"
+           Version="$(var.RedFlagVersion)"
+           Manufacturer="Fimeg"
+           UpgradeCode="8f3c9e6a-4b1d-4a7f-9c2e-1d6a8b2f5e91">
+
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="RedFlag self-hosted update management — server install" />
+
+    <!--
+      Forward-only, no downgrade — ETHOS doctrine elsewhere in this codebase
+      (refresh-token rotation, capability tokens) applied to the installer
+      itself. Windows Installer only compares the first three version
+      fields for upgrade detection — pass $(var.RedFlagVersion) as the
+      3-part form from CI, same 3-vs-4-part reconciliation bump-version.sh
+      already does for desktop/Cargo.toml vs tauri.conf.json.
+    -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of RedFlag Server is already installed. Forward-only upgrades only." />
+
+    <MediaTemplate />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="RedFlag">
+          <Component Id="ServerBinary" Guid="7a2d5e9c-3f81-4c6b-9e0a-2b7d4f8c1a63">
+            <File Id="RedFlagServerExe"
+                  Source="dist/redflag-server-windows-amd64.exe"
+                  Name="redflag-server.exe"
+                  KeyPath="yes" />
+
+            <!--
+              LocalSystem for v1 — matches "get it working" over
+              least-privilege for now. The Linux side went through the same
+              arc (helper started as a plain child before the systemd-run
+              privilege split). Revisit alongside SEC-030 once a Windows
+              privileged-executor model exists to hand mutation off to
+              instead of running the whole server as SYSTEM.
+            -->
+            <ServiceInstall Id="RedFlagServerService"
+                            Name="RedFlagServer"
+                            DisplayName="RedFlag Server"
+                            Description="RedFlag self-hosted update management server"
+                            Type="ownProcess"
+                            Start="auto"
+                            ErrorControl="normal"
+                            Account="LocalSystem" />
+
+            <ServiceControl Id="RedFlagServerServiceControl"
+                            Name="RedFlagServer"
+                            Start="install"
+                            Stop="both"
+                            Remove="uninstall"
+                            Wait="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <!--
+        ProgramData, not Program Files: this holds the mutable,
+        operator-edited config (DB connection, admin creds, signing key
+        once generated) — it must survive upgrades/reinstalls, which
+        Program Files contents don't reliably. Only the .example template
+        ships here; the real redflag.env is created by the operator (or a
+        future first-run helper), never overwritten by this installer once
+        it exists.
+      -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="REDFLAGDATA" Name="RedFlag">
+          <Component Id="ConfigTemplate" Guid="1c6e8a2d-9b47-4f3e-a1c8-6d3e9b4a2f70">
+            <File Id="RedFlagEnvExample"
+                  Source="config/redflag.env.example"
+                  Name="redflag.env.example"
+                  KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="ServerFeature" Level="1">
+      <ComponentRef Id="ServerBinary" />
+      <ComponentRef Id="ConfigTemplate" />
+    </Feature>
+
+    <!--
+      Desktop tray feature slots in here later (Casey, 2026-06-30: "checkbox
+      for adding the desktop alongside it" plus future screen-capture work
+      from the session-broker RAF). Deliberately not stubbed as a disabled
+      checkbox — a checkbox that does nothing when checked is worse than no
+      checkbox. Wire it once the desktop/Tauri artifact has a real merge
+      path into this installer, per Casey's "keep it separate for now."
+    -->
+
+  </Product>
+</Wix>

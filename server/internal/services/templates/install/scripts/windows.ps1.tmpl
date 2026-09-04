@@ -1,0 +1,729 @@
+# RedFlag Agent Installer - Windows PowerShell
+# Generated for agent: {{.AgentID}}
+# Platform: {{.Platform}}
+# Architecture: {{.Architecture}}
+# Version: {{.Version}}
+
+# This script is rendered per-token by the server and meant to be piped straight
+# into an elevated PowerShell:
+#   irm "<server>/api/v1/install/windows?token=XXX" | iex
+# That path can't bind script parameters, so the token and server are baked in at
+# render time — same model as the Linux installer (curl ... | sudo bash). Env vars
+# override for advanced/manual runs. Admin is enforced at runtime below; #Requires
+# can't fire under iex, so it's gone.
+$RegistrationToken  = if ($env:RF_TOKEN)  { $env:RF_TOKEN }  else { "{{.RegistrationToken}}" }
+$ServerUrl          = if ($env:RF_SERVER) { $env:RF_SERVER } else { "{{.ServerURL}}" }
+$ServerUrl          = $ServerUrl.TrimEnd("/")
+$SkipServiceInstall = [bool]$env:RF_SKIP_SERVICE_INSTALL
+
+function Convert-HexToBytes {
+    param([Parameter(Mandatory=$true)][string]$Hex)
+
+    $CleanHex = $Hex.Trim()
+    if (($CleanHex.Length % 2) -ne 0) {
+        throw "invalid hex length"
+    }
+
+    $Bytes = New-Object byte[] ([int]($CleanHex.Length / 2))
+    for ($i = 0; $i -lt $Bytes.Length; $i++) {
+        $Bytes[$i] = [Convert]::ToByte($CleanHex.Substring($i * 2, 2), 16)
+    }
+    return ,$Bytes
+}
+
+function Test-Ed25519Signature {
+    param(
+        [Parameter(Mandatory=$true)][byte[]]$Data,
+        [Parameter(Mandatory=$true)][byte[]]$Signature,
+        [Parameter(Mandatory=$true)][byte[]]$PublicKey
+    )
+
+    if ($PublicKey.Length -ne 32) {
+        throw "invalid Ed25519 public key length"
+    }
+    if ($Signature.Length -ne 64) {
+        throw "invalid Ed25519 signature length"
+    }
+
+    try {
+        $null = [System.Security.Cryptography.Ed25519]
+    } catch {
+        return $null
+    }
+
+    try {
+        $Ok = [System.Security.Cryptography.Ed25519]::VerifyData($Data, $Signature, $PublicKey)
+        return [bool]$Ok
+    } catch [System.Management.Automation.MethodException] {
+    } catch [System.Management.Automation.RuntimeException] {
+        if ($_.Exception.Message -notmatch "method|overload|argument") {
+            throw
+        }
+    }
+
+    try {
+        $Verifier = [System.Security.Cryptography.Ed25519]::Create($PublicKey)
+        $Ok = $Verifier.VerifyData($Data, $Signature)
+        return [bool]$Ok
+    } catch [System.Management.Automation.MethodException] {
+    } catch [System.Management.Automation.RuntimeException] {
+        if ($_.Exception.Message -notmatch "method|overload|argument") {
+            throw
+        }
+    }
+
+    try {
+        $Ok = [System.Security.Cryptography.Ed25519]::Verify($Signature, $Data, $PublicKey)
+        return [bool]$Ok
+    } catch [System.Management.Automation.MethodException] {
+    } catch [System.Management.Automation.RuntimeException] {
+        if ($_.Exception.Message -notmatch "method|overload|argument") {
+            throw
+        }
+    }
+
+    return $null
+}
+
+function Set-AgentConfigPermissions {
+    param(
+        [Parameter(Mandatory=$true)][string]$ConfigFilePath,
+        [Parameter(Mandatory=$true)][string]$ConfigDirectoryPath
+    )
+
+    Write-Host "Setting file permissions..." -ForegroundColor Yellow
+
+    # Use stable SIDs instead of localized account names:
+    #   S-1-5-18      SYSTEM
+    #   S-1-5-19      LOCAL SERVICE
+    #   S-1-5-32-544  BUILTIN\Administrators
+    & icacls $ConfigDirectoryPath /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-19:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to set ACL on $ConfigDirectoryPath"
+        exit 1
+    }
+
+    & icacls $ConfigFilePath /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-19:F" "*S-1-5-32-544:F" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to set ACL on $ConfigFilePath"
+        exit 1
+    }
+}
+
+function Repair-AgentConfigAccessIfNeeded {
+    param(
+        [Parameter(Mandatory=$true)][string]$ConfigFilePath,
+        [Parameter(Mandatory=$true)][string]$ConfigDirectoryPath
+    )
+
+    if (-not (Test-Path $ConfigFilePath)) {
+        return
+    }
+
+    try {
+        $null = Get-Content -Raw -Path $ConfigFilePath -ErrorAction Stop
+    } catch {
+        Write-Host "[WARN] [installer] [permissions] Existing config is not readable; repairing ACL before detection" -ForegroundColor Yellow
+        Set-AgentConfigPermissions -ConfigFilePath $ConfigFilePath -ConfigDirectoryPath $ConfigDirectoryPath
+    }
+}
+
+function Ensure-LocalApiGroup {
+    param([Parameter(Mandatory=$true)][string]$GroupName)
+
+    Write-Host "Ensuring local API access group..." -ForegroundColor Yellow
+
+    $LocalGroupCommandsAvailable = $null -ne (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue) -and
+                                   $null -ne (Get-Command New-LocalGroup -ErrorAction SilentlyContinue) -and
+                                   $null -ne (Get-Command Add-LocalGroupMember -ErrorAction SilentlyContinue)
+
+    if ($LocalGroupCommandsAvailable) {
+        $Group = Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue
+        if (-not $Group) {
+            New-LocalGroup -Name $GroupName -Description "RedFlag local agent API access" | Out-Null
+            Write-Host "✓ Group $GroupName created" -ForegroundColor Green
+        } else {
+            Write-Host "✓ Group $GroupName already exists" -ForegroundColor Green
+        }
+
+        $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($CurrentIdentity.User.Value -eq "S-1-5-18") {
+            Write-Host "[INFO] [installer] [localapi] Running as LocalSystem; no interactive user added to $GroupName" -ForegroundColor Gray
+            return
+        }
+
+        $CurrentUser = $CurrentIdentity.Name
+        try {
+            Add-LocalGroupMember -Group $GroupName -Member $CurrentUser -ErrorAction Stop
+            Write-Host "✓ Added $CurrentUser to $GroupName" -ForegroundColor Green
+            Write-Host "[INFO] [installer] [localapi] Sign out and back in if non-elevated local API access is not immediately available" -ForegroundColor Gray
+        } catch {
+            if ($_.Exception.Message -match "already.*member|already.*exists") {
+                Write-Host "✓ $CurrentUser already in $GroupName" -ForegroundColor Green
+            } else {
+                throw
+            }
+        }
+        return
+    }
+
+    # Windows PowerShell fallback for hosts without Microsoft.PowerShell.LocalAccounts.
+    $ComputerName = $env:COMPUTERNAME
+    try {
+        $Group = [ADSI]"WinNT://$ComputerName/$GroupName,group"
+        $null = $Group.Name
+        Write-Host "✓ Group $GroupName already exists" -ForegroundColor Green
+    } catch {
+        $Machine = [ADSI]"WinNT://$ComputerName"
+        $Group = $Machine.Create("group", $GroupName)
+        $Group.SetInfo()
+        $Group.Description = "RedFlag local agent API access"
+        $Group.SetInfo()
+        Write-Host "✓ Group $GroupName created" -ForegroundColor Green
+    }
+
+    $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($CurrentIdentity.User.Value -eq "S-1-5-18") {
+        Write-Host "[INFO] [installer] [localapi] Running as LocalSystem; no interactive user added to $GroupName" -ForegroundColor Gray
+        return
+    }
+
+    $CurrentUser = $CurrentIdentity.Name
+    $MemberPath = "WinNT://" + $CurrentUser.Replace("\", "/")
+    try {
+        $Group.Add($MemberPath)
+        Write-Host "✓ Added $CurrentUser to $GroupName" -ForegroundColor Green
+        Write-Host "[INFO] [installer] [localapi] Sign out and back in if non-elevated local API access is not immediately available" -ForegroundColor Gray
+    } catch {
+        if ($_.Exception.Message -match "already.*member|The object already exists") {
+            Write-Host "✓ $CurrentUser already in $GroupName" -ForegroundColor Green
+        } else {
+            throw
+        }
+    }
+}
+
+# Runtime admin check for better error messaging
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Error "This installer must be run as Administrator."
+    Write-Error "Right-click PowerShell and select 'Run as Administrator', then retry."
+    exit 1
+}
+
+# Detect Windows architecture
+$Arch = $env:PROCESSOR_ARCHITECTURE
+switch ($Arch) {
+    "AMD64" { $ArchTag = "amd64" }
+    "ARM64" { $ArchTag = "arm64" }
+    default {
+        Write-Error "Unsupported architecture: $Arch. Supported: AMD64, ARM64."
+        exit 1
+    }
+}
+
+$AgentID = "{{.AgentID}}"
+$BinaryURL = "$ServerUrl/api/v1/downloads/windows-${ArchTag}?version={{.Version}}"
+$ConfigURL = "{{.ConfigURL}}"
+$InstallDir = "C:\Program Files\RedFlag"
+$ConfigDir = "C:\ProgramData\RedFlag"
+$AgentConfigDir = "C:\ProgramData\RedFlag\agent"
+$ServerKeyDir = "C:\ProgramData\RedFlag\server"
+$OldConfigDir = "C:\ProgramData\Aggregator"
+$ServiceName = "RedFlagAgent"
+$LocalApiGroup = "RedFlagLocal"
+$Version = "{{.Version}}"
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$BackupDir = Join-Path $ConfigDir "backups\backup.$Timestamp"
+
+Write-Host "=== RedFlag Agent v$Version Installation ===" -ForegroundColor Cyan
+Write-Host "Agent ID: $AgentID"
+Write-Host "Platform: {{.Platform}}"
+Write-Host "Installing to: $InstallDir\redflag-agent.exe"
+Write-Host
+
+# Step 0: Detect existing installation and migration requirements
+Write-Host "Detecting existing RedFlag installations..." -ForegroundColor Yellow
+$MigrationNeeded = $false
+$CurrentVersion = "unknown"
+$ConfigVersion = "0"
+$ConfigPath = Join-Path $AgentConfigDir "config.json"
+$OldConfigPath = Join-Path $OldConfigDir "config.json"
+
+Repair-AgentConfigAccessIfNeeded -ConfigFilePath $ConfigPath -ConfigDirectoryPath $AgentConfigDir
+
+# Check for existing installation in new location
+if (Test-Path $ConfigPath) {
+    Write-Host "✓ Existing installation detected at $ConfigDir" -ForegroundColor Green
+    try {
+        $Config = Get-Content $ConfigPath | ConvertFrom-Json
+        if ($Config.agent_version) { $CurrentVersion = $Config.agent_version }
+        if ($Config.version) { $ConfigVersion = $Config.version.ToString() }
+    } catch {
+        Write-Host "  Warning: Could not parse config.json" -ForegroundColor Yellow
+    }
+    Write-Host "  Current agent version: $CurrentVersion"
+    Write-Host "  Current config version: $ConfigVersion"
+} elseif (Test-Path $OldConfigPath) {
+    Write-Host "⚠ Old installation detected at $OldConfigDir - MIGRATION REQUIRED" -ForegroundColor Yellow
+    $MigrationNeeded = $true
+    try {
+        $Config = Get-Content $OldConfigPath | ConvertFrom-Json
+        if ($Config.agent_version) { $CurrentVersion = $Config.agent_version }
+        if ($Config.version) { $ConfigVersion = $Config.version.ToString() }
+    } catch {
+        Write-Host "  Warning: Could not parse config.json" -ForegroundColor Yellow
+    }
+    Write-Host "  Current agent version: $CurrentVersion"
+    Write-Host "  Current config version: $ConfigVersion"
+} else {
+    Write-Host "✓ Fresh installation" -ForegroundColor Green
+}
+
+# Determine if migration is needed
+if (-not $MigrationNeeded) {
+    # Check if config version indicates migration is needed
+    try {
+        if ([int]$ConfigVersion -lt 4) {
+            $MigrationNeeded = $true
+            Write-Host "⚠ Config version $ConfigVersion < v4 - migration required" -ForegroundColor Yellow
+        }
+    } catch {
+        # Config version not a valid number
+    }
+
+    # Check for missing security features
+    if (Test-Path $ConfigPath) {
+        $ConfigContent = Get-Content $ConfigPath -Raw
+        if ($ConfigContent -notmatch "nonce_validation") {
+            $MigrationNeeded = $true
+            Write-Host "⚠ Missing security feature: nonce_validation" -ForegroundColor Yellow
+        }
+        if ($ConfigContent -notmatch "machine_id") {
+            $MigrationNeeded = $true
+            Write-Host "⚠ Missing security feature: machine_id_binding" -ForegroundColor Yellow
+        }
+    }
+}
+
+# Handle migration if needed
+if ($MigrationNeeded) {
+    Write-Host
+    Write-Host "=== Migration Required ===" -ForegroundColor Cyan
+    Write-Host "Agent will migrate on first start. Backing up configuration..." -ForegroundColor Yellow
+
+    # Create backup directory
+    New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+
+    # Backup old configuration if it exists
+    if (Test-Path $OldConfigPath) {
+        Write-Host "Backing up old configuration..." -ForegroundColor Yellow
+        Copy-Item $OldConfigPath $BackupDir -ErrorAction SilentlyContinue
+    }
+
+    # Backup current configuration if we're upgrading
+    if (Test-Path $ConfigPath) {
+        Write-Host "Backing up current configuration..." -ForegroundColor Yellow
+        Copy-Item $ConfigPath "$BackupDir\config.json.backup" -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Migration will run automatically when agent starts."
+    Write-Host "View migration logs with: Get-EventLog -LogName Application -Source $ServiceName -Newest 50"
+    Write-Host
+}
+
+# Step 1: Stop existing service if running
+$Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($Service -and $Service.Status -eq 'Running') {
+    Write-Host "Stopping existing RedFlag agent service..." -ForegroundColor Yellow
+    Stop-Service -Name $ServiceName -Force
+    Start-Sleep -Seconds 2
+}
+
+# Step 2: Create directories
+Write-Host "Creating directories..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+New-Item -ItemType Directory -Force -Path $AgentConfigDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ServerKeyDir | Out-Null
+New-Item -ItemType Directory -Force -Path "$ConfigDir\backups" | Out-Null
+New-Item -ItemType Directory -Force -Path "$ConfigDir\state" | Out-Null
+New-Item -ItemType Directory -Force -Path "$ConfigDir\logs" | Out-Null
+
+Ensure-LocalApiGroup -GroupName $LocalApiGroup
+
+# Step 3: Download agent binary
+Write-Host "Downloading agent binary..." -ForegroundColor Yellow
+$BinaryPath = Join-Path $InstallDir "redflag-agent.exe"
+$TmpBinary = Join-Path $env:TEMP "redflag-agent-download.exe"
+$Response = Invoke-WebRequest -Uri $BinaryURL -OutFile $TmpBinary -UseBasicParsing -PassThru
+
+# --- Cold-start trust: verify the binary against the signed release manifest ---
+# Parallels the Linux installer. The manifest lists the expected SHA-256 per
+# platform/arch and is Ed25519-signed. The hash pin is mandatory and fail-closed;
+# the manifest signature is verified where an Ed25519 verifier exists. NOTE: .NET
+# ships no native Ed25519, so on Windows the signature is best-effort (BouncyCastle)
+# while the hash pin is always enforced — full signature parity with Linux lands
+# when the Windows farm is reachable.
+$ManifestUrl = "$ServerUrl/api/v1/manifest?version={{.Version}}"
+$ServerPubKey = "{{.ServerPublicKey}}"
+try {
+    $ManifestResp = Invoke-WebRequest -Uri $ManifestUrl -UseBasicParsing
+} catch {
+    $ManifestStatus = $null
+    $ManifestErrorBody = $null
+    $Resp = $_.Exception.Response
+    if ($Resp) {
+        try { $ManifestStatus = [int]$Resp.StatusCode } catch {}
+        try {
+            $Stream = $Resp.GetResponseStream()
+            if ($Stream) {
+                $Reader = New-Object System.IO.StreamReader($Stream)
+                $ManifestErrorBody = $Reader.ReadToEnd()
+                $Reader.Close()
+            }
+        } catch {}
+    }
+    if ($ManifestStatus) {
+        Write-Error "Failed to fetch release manifest from $ManifestUrl (HTTP $ManifestStatus) - refusing to install."
+    } else {
+        Write-Error "Failed to fetch release manifest from $ManifestUrl ($($_.Exception.Message)) - refusing to install."
+    }
+    if ($ManifestErrorBody) {
+        Write-Error "Manifest response: $ManifestErrorBody"
+    }
+    Remove-Item $TmpBinary -Force
+    exit 1
+}
+$ManifestBody = $ManifestResp.Content
+$ManifestSig = $null
+if ($ManifestResp.Headers.ContainsKey("X-Content-Signature")) {
+    $ManifestSig = $ManifestResp.Headers["X-Content-Signature"]
+}
+
+if (-not ($ManifestSig -and $ServerPubKey)) {
+    Write-Error "Release manifest is unsigned or no server key embedded - refusing to install."
+    Remove-Item $TmpBinary -Force
+    exit 1
+}
+
+# Defense-in-depth: verify the manifest's Ed25519 signature if a verifier exists.
+try {
+    $pk = Convert-HexToBytes $ServerPubKey
+    $sg = Convert-HexToBytes $ManifestSig
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($ManifestBody)
+    $ok = Test-Ed25519Signature -Data $bodyBytes -Signature $sg -PublicKey $pk
+} catch {
+    Write-Error "Release manifest signature or public key is malformed - refusing to install."
+    Remove-Item $TmpBinary -Force
+    exit 1
+}
+if ($null -eq $ok) {
+    Write-Host "WARNING: No native Ed25519 verifier - manifest signature not checked (hash pin still enforced)." -ForegroundColor Yellow
+    Write-Host "For full signature verification, install PowerShell 7/.NET with Ed25519 support." -ForegroundColor Yellow
+} elseif (-not $ok) {
+    Write-Error "Release manifest signature invalid - refusing to install."
+    Remove-Item $TmpBinary -Force
+    exit 1
+} else {
+    Write-Host "✓ Manifest signature verified (Ed25519)" -ForegroundColor Green
+}
+
+# Mandatory hash pin: the downloaded binary must match its manifest entry.
+$Manifest = $ManifestBody | ConvertFrom-Json
+$ExpectedHash = $null
+foreach ($a in $Manifest.artifacts) {
+    if ($a.platform -eq "windows" -and $a.architecture -eq $ArchTag) {
+        $ExpectedHash = $a.sha256.ToLower()
+        break
+    }
+}
+if (-not $ExpectedHash) {
+    Write-Error "No manifest entry for windows/$ArchTag - refusing to install."
+    Remove-Item $TmpBinary -Force
+    exit 1
+}
+$ActualManifestHash = (Get-FileHash -Path $TmpBinary -Algorithm SHA256).Hash.ToLower()
+if ($ActualManifestHash -ne $ExpectedHash) {
+    Write-Error "Binary hash does not match the signed manifest - possible tampering."
+    Write-Error "  expected (signed manifest): $ExpectedHash"
+    Write-Error "  actual   (downloaded):      $ActualManifestHash"
+    Remove-Item $TmpBinary -Force
+    exit 1
+}
+Write-Host "✓ Cold-start trust established: binary matches signed release manifest ($ActualManifestHash)" -ForegroundColor Green
+# --- end cold-start manifest verification ---
+
+# Verify checksum if server provided one
+$ExpectedChecksum = $null
+if ($Response.Headers.ContainsKey("X-Content-SHA256")) {
+    $ExpectedChecksum = $Response.Headers["X-Content-SHA256"]
+}
+if ($ExpectedChecksum) {
+    $ActualHash = (Get-FileHash -Path $TmpBinary -Algorithm SHA256).Hash.ToLower()
+    if ($ActualHash -ne $ExpectedChecksum) {
+        Write-Error "Checksum verification failed"
+        Write-Error "Expected: $ExpectedChecksum"
+        Write-Error "Actual:   $ActualHash"
+        Remove-Item $TmpBinary -Force
+        exit 1
+    }
+    Write-Host "Checksum verified: $ActualHash" -ForegroundColor Green
+} else {
+    Write-Host "WARNING: Server did not provide checksum header. Proceeding without verification." -ForegroundColor Yellow
+}
+
+# ISSUE-002: Verify binary signature before installation (TOFU model)
+$ExpectedSignature = $null
+if ($Response.Headers.ContainsKey("X-Content-Signature")) {
+    $ExpectedSignature = $Response.Headers["X-Content-Signature"]
+}
+if ($ExpectedSignature -and "{{.ServerPublicKey}}") {
+    Write-Host "Verifying binary signature..." -ForegroundColor Yellow
+    try {
+        $pubKeyBytes = Convert-HexToBytes "{{.ServerPublicKey}}"
+        $sigBytes = Convert-HexToBytes $ExpectedSignature
+        $binaryBytes = [System.IO.File]::ReadAllBytes($TmpBinary)
+
+        $verified = Test-Ed25519Signature -Data $binaryBytes -Signature $sigBytes -PublicKey $pubKeyBytes
+        if ($null -eq $verified) {
+            Write-Host "WARNING: No native Ed25519 verifier - binary signature not checked (manifest hash pin already enforced)." -ForegroundColor Yellow
+            Write-Host "For full signature verification, install PowerShell 7/.NET with Ed25519 support." -ForegroundColor Yellow
+        } elseif ($verified) {
+            Write-Host "✓ Binary signature verified (Ed25519)" -ForegroundColor Green
+        } else {
+            throw "Signature verification failed"
+        }
+    } catch {
+        Write-Error "Binary signature verification failed - possible tampering"
+        Write-Error "Detail: $($_.Exception.Message)"
+        Remove-Item $TmpBinary -Force
+        exit 1
+    }
+} else {
+    Write-Host "WARNING: Cannot verify signature - missing public key or signature" -ForegroundColor Yellow
+    Write-Host "This is a security risk. Ensure server is trusted." -ForegroundColor Yellow
+}
+
+Move-Item -Path $TmpBinary -Destination $BinaryPath -Force
+
+# Step 4: Handle configuration
+if (Test-Path $ConfigPath) {
+    # Upgrade - preserve existing config
+    Write-Host "Upgrade detected - preserving existing configuration" -ForegroundColor Green
+    Write-Host "Agent will handle migration automatically on first start" -ForegroundColor Green
+} else {
+    # Fresh install - create minimal config template with registration token
+    Write-Host "Fresh install detected - creating minimal configuration template" -ForegroundColor Green
+
+    $ConfigTemplate = @"
+{
+    "version": 5,
+    "agent_version": "$Version",
+    "agent_id": "",
+    "token": "",
+    "refresh_token": "",
+    "registration_token": "$RegistrationToken",
+    "machine_id": "",
+    "check_in_interval": 300,
+    "server_url": "$ServerUrl",
+    "network": {
+        "timeout": 30000000000,
+        "retry_count": 3,
+        "retry_delay": 5000000000,
+        "max_idle_conn": 10
+    },
+    "proxy": {
+        "enabled": false
+    },
+    "tls": {
+        "enabled": false,
+        "insecure_skip_verify": false
+    },
+    "logging": {
+        "level": "info",
+        "max_size": 100,
+        "max_backups": 3,
+        "max_age": 28
+    },
+    "subsystems": {
+        "system": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "filesystem": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "network": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "processes": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}},
+        "updates": {"enabled": true, "timeout": 30000000000, "circuit_breaker": {"enabled": false, "failure_threshold": 0, "failure_window": 0, "open_duration": 0, "half_open_attempts": 0}},
+        "storage": {"enabled": true, "timeout": 10000000000, "circuit_breaker": {"enabled": true, "failure_threshold": 3, "failure_window": 600000000000, "open_duration": 1800000000000, "half_open_attempts": 2}}
+    },
+    "security": {
+        "ed25519_verification": true,
+        "nonce_validation": true,
+        "machine_id_binding": true
+    }
+}
+"@
+
+    $ConfigTemplate | Set-Content -Path $ConfigPath -Encoding UTF8
+}
+
+# Decide install flow per docs/AGENT_LIFECYCLE.md:
+#   Fresh Install  → no usable local config → call --register
+#   Upgrade In Place → local config has non-empty refresh_token → skip --register
+# Token in URL is ignored on the upgrade path; refresh_token authenticates.
+$AgentBinary = Join-Path $InstallDir "redflag-agent.exe"
+$ExistingRefreshToken = ""
+if (Test-Path $ConfigPath) {
+    try {
+        $ExistingConfig = Get-Content -Raw -Path $ConfigPath -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($ExistingConfig.refresh_token) {
+            $ExistingRefreshToken = [string]$ExistingConfig.refresh_token
+        }
+    } catch {
+        # Malformed config — treat as no credentials present, fall through to register.
+        Write-Host "[WARN] [installer] [register] Could not parse existing config; treating as fresh install" -ForegroundColor Yellow
+    }
+}
+
+if ($ExistingRefreshToken -ne "") {
+    Write-Host "[INFO] [installer] [register] Upgrade in place - existing credentials detected, skipping registration" -ForegroundColor Cyan
+    Write-Host "[INFO] [installer] [register] Token in URL is ignored on the upgrade path; refresh_token authenticates" -ForegroundColor Gray
+} elseif ($RegistrationToken -ne "") {
+    Write-Host "[INFO] [installer] [register] Registering agent with server..." -ForegroundColor Cyan
+    $RegisterProcess = Start-Process -FilePath $AgentBinary -ArgumentList "--server", "$ServerUrl", "--token", "$RegistrationToken", "--register" -Wait -PassThru -NoNewWindow
+    if ($RegisterProcess.ExitCode -eq 0) {
+        Write-Host "[SUCCESS] [installer] [register] Agent registered successfully" -ForegroundColor Green
+        Write-Host "[INFO] [installer] [register] Agent ID assigned, configuration updated" -ForegroundColor Gray
+    } else {
+        Write-Host "[ERROR] [installer] [register] Registration failed - check token validity and server connectivity" -ForegroundColor Red
+        Write-Host "[WARN] [installer] [register] Agent installed but not registered. Service will not start." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "[INFO] [installer] [register] To retry registration manually:" -ForegroundColor Gray
+        Write-Host "[INFO] [installer] [register]   $AgentBinary --server $ServerUrl --token YOUR_TOKEN --register" -ForegroundColor Gray
+        Write-Host "[INFO] [installer] [register] Then start service:" -ForegroundColor Gray
+        Write-Host "[INFO] [installer] [register]   Start-Service -Name $ServiceName" -ForegroundColor Gray
+        exit 1
+    }
+} else {
+    Write-Host "[INFO] [installer] [register] No registration token provided - skipping registration" -ForegroundColor Gray
+    Write-Host "[INFO] [installer] [register] Service will start but agent will exit until registered" -ForegroundColor Gray
+    Write-Host "[INFO] [installer] [register] To register manually:" -ForegroundColor Gray
+    Write-Host "[INFO] [installer] [register]   $AgentBinary --server $ServerUrl --token YOUR_TOKEN --register" -ForegroundColor Gray
+}
+
+# Registration rewrites config.json with agent_id/token/refresh_token, so the
+# restrictive ACL must be applied after registration, not before.
+Set-AgentConfigPermissions -ConfigFilePath $ConfigPath -ConfigDirectoryPath $AgentConfigDir
+
+# Step 6: Install Windows service (if not skipped)
+if (-not $SkipServiceInstall) {
+    Write-Host "Creating Windows service..." -ForegroundColor Yellow
+
+    # Check if service exists and remove it first
+    $ExistingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($ExistingService) {
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        & sc.exe delete $ServiceName | Out-Null
+    }
+
+    # Register service with appropriate credentials
+    if ([System.Environment]::OSVersion.Version.Major -ge 10) {
+        # Windows 10/Server 2016+ - can use LocalService
+        New-Service -Name $ServiceName -BinaryPathName $BinaryPath -DisplayName "RedFlag Security Agent" -Description "RedFlag Security Monitoring Agent" -StartupType Automatic | Out-Null
+    } else {
+        # Older Windows - use LocalSystem
+        New-Service -Name $ServiceName -BinaryPathName $BinaryPath -DisplayName "RedFlag Security Agent" -Description "RedFlag Security Monitoring Agent" -StartupType Automatic | Out-Null
+    }
+
+    Write-Host "Starting service..." -ForegroundColor Yellow
+    Start-Service -Name $ServiceName
+}
+
+# Step 7: Download and install native RedFlag Desktop.
+# The desktop binary is optional — the installer proceeds without it if the
+# server has no build for this platform.
+$DesktopBinary = "redflag-desktop.exe"
+$DesktopURL = "$ServerUrl/api/v1/desktop/windows/amd64?version=$Version"
+$DesktopBinaryPath = Join-Path $InstallDir $DesktopBinary
+
+Write-Host
+Write-Host "Downloading RedFlag Desktop..." -ForegroundColor Yellow
+try {
+    $TmpDesktop = Join-Path $env:TEMP "redflag-desktop-download.exe"
+    $DesktopResp = Invoke-WebRequest -Uri $DesktopURL -OutFile $TmpDesktop -UseBasicParsing -PassThru
+
+    # Verify desktop binary hash against the signed release manifest.
+    $DesktopHash = (Get-FileHash -Path $TmpDesktop -Algorithm SHA256).Hash.ToLower()
+    $ManifestDesktop = $Manifest.artifacts | Where-Object { $_.platform -eq "desktop-windows" -and $_.architecture -eq $ArchTag }
+    if ($ManifestDesktop) {
+        if ($DesktopHash -ne $ManifestDesktop.sha256.ToLower()) {
+            Write-Error "Desktop binary hash does not match signed manifest — refusing to install."
+            Write-Error "  expected: $($ManifestDesktop.sha256.ToLower())"
+            Write-Error "  actual:   $DesktopHash"
+            Remove-Item $TmpDesktop -Force
+            exit 1
+        }
+        Write-Host "✓ Desktop hash verified against signed manifest" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] [installer] [desktop] No manifest entry for desktop-windows/$ArchTag — hash not verified" -ForegroundColor Yellow
+    }
+
+    Move-Item -Path $TmpDesktop -Destination $DesktopBinaryPath -Force
+    Write-Host "✓ Desktop app installed to $DesktopBinaryPath" -ForegroundColor Green
+} catch {
+    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+        Write-Host "  Desktop app not available for this platform — skipping." -ForegroundColor Gray
+    } else {
+        Write-Host "[WARN] [installer] [desktop] Download failed: $($_.Exception.Message) — skipping desktop install." -ForegroundColor Yellow
+    }
+}
+
+# Step 8: Register desktop autostart for the interactive user.
+# The Run key launches redflag-desktop.exe on interactive logon.
+# Must target HKCU (per-user); the installer runs elevated so we resolve the
+# original non-elevated user via the calling process chain.
+if (Test-Path $DesktopBinaryPath) {
+    Write-Host "Registering desktop autostart..." -ForegroundColor Yellow
+    try {
+        # Walk up the process tree to find the non-elevated caller.
+        $InteractiveSID = $null
+        $CurrentPID = [System.Diagnostics.Process]::GetCurrentProcess().Id
+        $Visited = @{}
+        while ($CurrentPID -and !$Visited[$CurrentPID]) {
+            $Visited[$CurrentPID] = $true
+            try {
+                $Proc = Get-CimInstance Win32_Process -Filter "ProcessId = $CurrentPID" -ErrorAction Stop
+                if ($Proc.Name -in @('explorer.exe', 'pwsh.exe', 'powershell.exe') -and $Proc.SessionId -ne 0) {
+                    $InteractiveSID = ([System.Security.Principal.NTAccount]$Proc.GetOwner().User).Translate([System.Security.Principal.SecurityIdentifier]).Value
+                    break
+                }
+                $CurrentPID = $Proc.ParentProcessId
+            } catch { break }
+        }
+        if (-not $InteractiveSID) {
+            # Fallback: use the SID of the active console session user.
+            $ConsoleSession = (Get-CimInstance Win32_ComputerSystem).UserName
+            if ($ConsoleSession) {
+                $InteractiveSID = ([System.Security.Principal.NTAccount]$ConsoleSession).Translate([System.Security.Principal.SecurityIdentifier]).Value
+            }
+        }
+        if ($InteractiveSID) {
+            $RunKey = "registry::HKEY_USERS\$InteractiveSID\Software\Microsoft\Windows\CurrentVersion\Run"
+            New-Item -Path $RunKey -Force | Out-Null
+            Set-ItemProperty -Path $RunKey -Name "RedFlagDesktop" -Value "`"$DesktopBinaryPath`"" -Type String
+            Write-Host "✓ Desktop autostart registered for interactive user" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] [installer] [desktop] Could not resolve interactive user SID — autostart not registered." -ForegroundColor Yellow
+            Write-Host "  To launch manually: $DesktopBinaryPath" -ForegroundColor Gray
+        }
+    } catch {
+        Write-Host "[WARN] [installer] [desktop] Autostart registration failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  To launch manually: $DesktopBinaryPath" -ForegroundColor Gray
+    }
+}
+
+Write-Host
+Write-Host "✓ Installation complete!" -ForegroundColor Green
+Write-Host "Agent is running. Check status with: Get-Service $ServiceName"
+Write-Host "View logs with: Get-Content $ConfigDir\logs\agent.log -Tail 100 -Wait"
+if (Test-Path $DesktopBinaryPath) {
+    Write-Host "Desktop tray app installed. Launch it from the Start Menu or reboot."
+}

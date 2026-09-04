@@ -1,0 +1,24 @@
+[package]
+name = "redflag-helper"
+version = "0.2.9"
+edition = "2021"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+ed25519-dalek = "2.1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+libc = "0.2"
+
+[[bin]]
+name = "redflag-helper"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

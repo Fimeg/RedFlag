@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: redflag-postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/.env:/shared/.env:z
+    ports:
+      - "31338:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redflag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    env_file:
+      - ./config/.env
+
+  server:
+    build:
+      context: .
+      dockerfile: ./server/Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-0.2.9.3}
+    container_name: redflag-server
+    volumes:
+      - server-config:/app/config
+      - server-data:/app/data
+      - ./config/.env:/shared/.env:z
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    ports:
+      # 31337 = agent/API endpoint, 31336 = dashboard. Same process now —
+      # the UI is embedded in the server binary; the nginx web container is gone.
+      - "31337:8080"
+      - "31336:8080"
+    command: ["./redflag-server"]
+    restart: unless-stopped
+    env_file:
+      - ./config/.env
+
+volumes:
+  postgres-data:
+  server-data:
+  server-config:
